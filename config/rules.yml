@@ -1,0 +1,154 @@
+rules:
+- id: rule_1775033948244_0.2186690169075437
+  name: 机票行程单归差旅费
+  priority: 10
+  conditions:
+  - field: invoice_type
+    match_type: contains
+    value: 机票
+  - field: invoice_type
+    match_type: contains
+    value: 行程单
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.23753908860717055
+  name: 火车票归差旅费
+  priority: 10
+  conditions:
+  - field: invoice_type
+    match_type: contains
+    value: 火车票
+  - field: invoice_type
+    match_type: contains
+    value: 铁路
+  - field: items_description
+    match_type: contains
+    value: 火车
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.07501808280487332
+  name: 船票归差旅费
+  priority: 10
+  conditions:
+  - field: invoice_type
+    match_type: contains
+    value: 船票
+  - field: items_description
+    match_type: contains
+    value: 轮船
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.2958832295809526
+  name: 住宿费归差旅费
+  priority: 20
+  conditions:
+  - field: invoice_type
+    match_type: contains
+    value: 住宿
+  - field: seller_name
+    match_type: regex
+    value: (酒店|宾馆|旅馆|民宿|客栈)
+  - field: items_description
+    match_type: regex
+    value: (住宿|客房|房费)
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.10310541193277922
+  name: 出租车/网约车归差旅费
+  priority: 20
+  conditions:
+  - field: seller_name
+    match_type: regex
+    value: (出租|滴滴|曹操|嘀嗒|高德打车|神州专车)
+  - field: invoice_type
+    match_type: contains
+    value: 出租车
+  - field: items_description
+    match_type: regex
+    value: (客运服务费|运输服务\*?客运服务费|网约车|打车费|约车服务)
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.47594353967137126
+  name: 会议场地费归会议费
+  priority: 10
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (会议室|会务|会议服务|场地租用|会议场地)
+  - field: seller_name
+    match_type: regex
+    value: (会展|会议中心|培训中心)
+  condition_logic: OR
+  target_category: meeting
+- id: rule_1775033948245_0.6520635767141829
+  name: 办公耗材归材料费
+  priority: 20
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (办公用品|打印纸|墨盒|文具|耗材)
+  - field: seller_name
+    match_type: regex
+    value: (办公|文具|耗材)
+  condition_logic: OR
+  target_category: material
+- id: rule_1775033948245_0.11635468216879197
+  name: 原材料归材料费
+  priority: 20
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (原材料|材料|零件|配件|备件)
+  condition_logic: OR
+  target_category: material
+- id: rule_1775033948245_0.7981118664847423
+  name: 电子发票-代订机票归差旅费
+  priority: 5
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (代订机票|代办机票|机票服务|购机票|订机票|代购机票|飞机票)
+  - field: seller_name
+    match_type: regex
+    value: (携程|去哪儿|飞猪|同程|途牛|艺龙|华程|中青旅|中信旅|国旅|中旅|南湖国际|环球旅行)
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.17506779647521487
+  name: 电子发票-代订火车票归差旅费
+  priority: 5
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (代订火车票|代订高铁票|代订动车票|铁路客票|代购火车票|代购高铁)
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.42203903779161145
+  name: 电子发票-代订住宿归差旅费
+  priority: 5
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (代订酒店|代订客房|代订住宿|住宿服务|酒店服务|代订宾馆)
+  condition_logic: OR
+  target_category: travel
+- id: rule_1775033948245_0.9512643607569243
+  name: 电子发票-会议服务费归会议费
+  priority: 5
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (会议服务|会务费|会务服务|会议室租赁|场地租赁|学术会议|研讨会|培训服务费)
+  condition_logic: OR
+  target_category: meeting
+- id: rule_1775033948245_0.9682890999058592
+  name: OTA平台代订交通归差旅费
+  priority: 8
+  conditions:
+  - field: seller_name
+    match_type: regex
+    value: (携程|去哪儿|飞猪|同程旅行|途牛|艺龙|铁路|12306|华程西南|中青旅)
+  - field: items_description
+    match_type: regex
+    value: (机票|火车票|高铁票|动车票|客票|代订|附加)
+  condition_logic: OR
+  target_category: travel

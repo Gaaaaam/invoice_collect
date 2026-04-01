@@ -1,0 +1,196 @@
+import os
+import shutil
+import uuid
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from sqlalchemy import select, delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models import CollectionItem, Invoice
+from app.schemas import InvoiceResponse, MessageResponse
+from app.services.extractor import get_extractor
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".ofd"}
+
+router = APIRouter(prefix="/api/invoices", tags=["invoices"])
+
+
+def _allowed_file(filename: str) -> bool:
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in ALLOWED_EXTENSIONS
+
+
+@router.post("/upload", response_model=list[InvoiceResponse])
+async def upload_invoices(
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """上传一张或多张发票文件，保存并触发 NuExtract 抽取"""
+    results = []
+    for file in files:
+        if not _allowed_file(file.filename or ""):
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的文件类型：{file.filename}，仅支持 PDF/图片/OFD",
+            )
+
+        ext = os.path.splitext(file.filename or "invoice")[1].lower()
+        unique_name = f"{uuid.uuid4().hex}{ext}"
+        save_path = os.path.join(UPLOAD_DIR, unique_name)
+
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        invoice = Invoice(
+            filename=file.filename or unique_name,
+            file_path=save_path,
+            file_type=ext.lstrip("."),
+            extract_status="pending",
+        )
+        db.add(invoice)
+        await db.flush()
+
+        # 异步抽取发票信息
+        try:
+            extractor = get_extractor()
+            extracted = await extractor.extract_from_file(
+                save_path,
+                filename_hint=file.filename or unique_name,
+            )
+            _apply_extracted(invoice, extracted)
+            invoice.extract_status = "done"
+        except Exception as e:
+            invoice.extract_status = "error"
+            print(f"[invoices] extract error for {file.filename}: {e}")
+
+        results.append(invoice)
+
+    await db.commit()
+    for inv in results:
+        await db.refresh(inv)
+    return results
+
+
+def _apply_extracted(invoice: Invoice, data: dict) -> None:
+    invoice.invoice_type = data.get("invoice_type")
+    invoice.invoice_number = data.get("invoice_number")
+    invoice.issue_date = data.get("issue_date")
+    invoice.seller_name = data.get("seller_name")
+    invoice.buyer_name = data.get("buyer_name")
+    invoice.amount = data.get("amount")
+    invoice.tax_amount = data.get("tax_amount")
+    invoice.total_amount = data.get("total_amount")
+    invoice.items_description = data.get("items_description")
+    invoice.remarks = data.get("remarks")
+    invoice.invoice_subcategory = data.get("invoice_subcategory")
+    invoice.departure_city = data.get("departure_city")
+    invoice.arrival_city = data.get("arrival_city")
+    invoice.departure_time = data.get("departure_time")
+    invoice.arrival_time = data.get("arrival_time")
+    invoice.is_transport = bool(data.get("is_transport", False))
+    invoice.extracted_data = data
+
+
+@router.get("", response_model=list[InvoiceResponse])
+async def list_invoices(
+    extract_status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """列出所有已上传的发票"""
+    stmt = select(Invoice).order_by(Invoice.uploaded_at.desc())
+    if extract_status:
+        stmt = stmt.where(Invoice.extract_status == extract_status)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.get("/{invoice_id}", response_model=InvoiceResponse)
+async def get_invoice(invoice_id: int, db: AsyncSession = Depends(get_db)):
+    invoice = await db.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="发票不存在")
+    return invoice
+
+
+_MEDIA_TYPES: dict[str, str] = {
+    ".pdf":  "application/pdf",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png":  "image/png",
+    ".bmp":  "image/bmp",
+    ".tiff": "image/tiff",
+    ".tif":  "image/tiff",
+    ".ofd":  "application/ofd",  # OFD 通常需要专用软件
+}
+
+
+@router.get("/{invoice_id}/file")
+async def get_invoice_file(invoice_id: int, db: AsyncSession = Depends(get_db)):
+    """返回发票原始文件，用于前端预览。"""
+    invoice = await db.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="发票不存在")
+    if not os.path.exists(invoice.file_path):
+        raise HTTPException(status_code=404, detail="文件不存在，可能已被删除")
+
+    ext = os.path.splitext(invoice.file_path)[1].lower()
+    media_type = _MEDIA_TYPES.get(ext, "application/octet-stream")
+
+    return FileResponse(
+        invoice.file_path,
+        media_type=media_type,
+        filename=invoice.filename,
+        headers={"Content-Disposition": f'inline; filename="{invoice.filename}"'},
+    )
+
+
+@router.delete("/{invoice_id}", response_model=MessageResponse)
+async def delete_invoice(invoice_id: int, db: AsyncSession = Depends(get_db)):
+    invoice = await db.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="发票不存在")
+
+    # 删除归集条目
+    await db.execute(delete(CollectionItem).where(CollectionItem.invoice_id == invoice_id))
+
+    # 删除文件
+    if os.path.exists(invoice.file_path):
+        try:
+            os.remove(invoice.file_path)
+        except OSError:
+            pass
+
+    await db.delete(invoice)
+    await db.commit()
+    return MessageResponse(message=f"已删除发票：{invoice.filename}")
+
+
+@router.post("/{invoice_id}/re-extract", response_model=InvoiceResponse)
+async def re_extract_invoice(invoice_id: int, db: AsyncSession = Depends(get_db)):
+    """对已上传发票重新执行 NuExtract 抽取"""
+    invoice = await db.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="发票不存在")
+
+    try:
+        extractor = get_extractor()
+        extracted = await extractor.extract_from_file(
+            invoice.file_path,
+            filename_hint=invoice.filename,
+        )
+        _apply_extracted(invoice, extracted)
+        invoice.extract_status = "done"
+    except Exception as e:
+        invoice.extract_status = "error"
+        raise HTTPException(status_code=500, detail=f"抽取失败：{e}")
+
+    await db.commit()
+    await db.refresh(invoice)
+    return invoice

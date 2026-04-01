@@ -1,0 +1,22 @@
+categories:
+  - id: travel
+    name: 差旅费
+    groupable: true
+    group_type: travel_loop
+    description: 出差产生的交通、住宿等费用
+
+  - id: meeting
+    name: 会议费
+    groupable: true
+    group_type: meeting
+    description: 会议相关的场地、餐饮、材料等费用
+
+  - id: material
+    name: 材料费
+    groupable: false
+    description: 采购办公用品、原材料等费用
+
+  - id: other
+    name: 其他费用
+    groupable: false
+    description: 不属于以上类别的其他费用

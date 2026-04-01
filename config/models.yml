@@ -1,0 +1,10 @@
+llm:
+  base_url: "http://192.168.1.107:7225/v1"
+  api_key: "sk-your-api-key-here"
+  model: "instruct_model"
+  timeout: 60
+
+nuextract:
+  host: "192.168.1.107"
+  port: 8080
+  timeout: 60
