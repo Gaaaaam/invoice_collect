@@ -1,4 +1,25 @@
 rules:
+- id: rule_train_reimbursement_voucher
+  name: 火车票报销凭证归差旅费
+  priority: 8
+  conditions:
+  - field: remarks
+    match_type: contains
+    value: 报销凭证
+  - field: remarks
+    match_type: contains
+    value: 仅供报销使用
+  - field: items_description
+    match_type: contains
+    value: 报销凭证
+  - field: items_description
+    match_type: contains
+    value: 仅供报销使用
+  - field: items_description
+    match_type: regex
+    value: 检票[:：]?\s*\d+[A-Za-z]?
+  condition_logic: OR
+  target_category: travel
 - id: rule_1775033948244_0.2186690169075437
   name: 机票行程单归差旅费
   priority: 10
@@ -21,9 +42,24 @@ rules:
   - field: invoice_type
     match_type: contains
     value: 铁路
+  - field: invoice_type
+    match_type: contains
+    value: 铁路电子客票
   - field: items_description
     match_type: contains
     value: 火车
+  - field: items_description
+    match_type: contains
+    value: 高铁
+  - field: items_description
+    match_type: contains
+    value: 动车
+  - field: items_description
+    match_type: regex
+    value: '[GDCZTgdczt]\d{2,5}\s+.*[→\-—至到].*站'
+  - field: items_description
+    match_type: contains
+    value: 电子客票号
   condition_logic: OR
   target_category: travel
 - id: rule_1775033948245_0.07501808280487332

@@ -218,6 +218,8 @@ INTERCITY_TRANSPORT_TYPES = {
 _FILENAME_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(铁路电子客票|电子客票|railway.*e-?ticket)", re.I), "train_electronic"),
     (re.compile(r"(railway[_\-]?invoice|railway)", re.I), "train_electronic"),
+    # 常见命名「xxx高铁电子发票.png」仅有「高铁」无「高铁票」，需走铁路电子模板而非通用模板
+    (re.compile(r"(高铁|动车).*电子发票|电子发票.*(高铁|动车)|高铁-电子|动车-电子", re.I), "train_electronic"),
     (re.compile(r"(动车票|高铁票|火车票|train\s*ticket)", re.I), "train_physical"),
     (re.compile(r"(行程单|itinerary|航空运输电子客票行程单)", re.I), "air_itinerary"),
     (re.compile(r"(滴滴|曹操出行|高德打车|嘀嗒|神州专车|网约车|ride\s*hailing)", re.I), "ridehailing"),
@@ -228,6 +230,9 @@ _FILENAME_RULES: list[tuple[re.Pattern, str]] = [
 # 内容字段关键词 → 类型（用于从 NuExtract 初步结果中二次判断）
 _CONTENT_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"电子发票[（(]铁路电子客票"), "train_electronic"),
+    (re.compile(r"铁路电子客票"), "train_electronic"),
+    # 纸质报销凭证（蓝色报销用票样），常见无「火车票」字样文件名
+    (re.compile(r"(报销凭证|仅供报销使用|报销凭证\s*遗失不补)"), "train_physical"),
     (re.compile(r"(动车组|高速铁路|普速铁路|铁路客票)"), "train_physical"),
     (re.compile(r"航空运输电子客票行程单"), "air_itinerary"),
     (re.compile(r"(滴滴出行|曹操出行|高德打车|哈啰出行|T3出行|享道出行)"), "ridehailing"),
@@ -243,8 +248,11 @@ _CONTENT_RULES: list[tuple[re.Pattern, str]] = [
 _ITEMS_SUBCATEGORY_RULES: list[tuple[re.Pattern, str]] = [
     # 机票/航班相关
     (re.compile(r"(代订机票|代办机票|机票服务|机票费|订机票|购机票|航空服务|飞机票|代购机票|机场服务费)"), "air"),
-    # 火车/高铁/动车相关
-    (re.compile(r"(代订火车票|代订高铁票|代订动车票|铁路客票|火车票服务|高铁服务|动车服务|代购火车票)"), "train"),
+    # 火车/高铁/动车相关（含直连铁路电子票常见票面/项目用语、纸质报销凭证）
+    (re.compile(
+        r"(代订火车票|代订高铁票|代订动车票|铁路客票|火车票服务|高铁服务|动车服务|代购火车票|"
+        r"电子客票号|二等座|一等座|商务座|特等座|车次|报销凭证|仅供报销使用)"
+    ), "train"),
     # 住宿相关
     (re.compile(r"(代订酒店|代订客房|住宿费|酒店服务|客房费|住宿服务|宾馆|旅馆|代订住宿)"), "hotel"),
     # 出租车/本地交通
@@ -576,6 +584,19 @@ def _normalize_result(raw: dict, inv_type: str) -> dict:
         items_desc = raw.get("items_description") or ""
         remarks = raw.get("remarks") or ""
         subcategory = detect_items_subcategory(items_desc, remarks)
+        inv_type_raw = (raw.get("invoice_type") or "").strip()
+        combined_text = f"{items_desc} {remarks} {inv_type_raw}"
+        # NuExtract 有时只抽到「电子发票」，但标题里实际为铁路电子客票；用完整类型字段兜底
+        if subcategory is None and (
+            "铁路电子客票" in inv_type_raw
+            or ("铁路" in inv_type_raw and "客票" in inv_type_raw)
+        ):
+            subcategory = "train"
+        # 纸质火车票报销凭证常被 OCR 成普通电子发票，无铁路字样
+        if subcategory is None and re.search(
+            r"(报销凭证|仅供报销使用|报销凭证\s*遗失不补)", combined_text
+        ):
+            subcategory = "train"
 
         result["invoice_type"] = raw.get("invoice_type") or "电子发票（普通发票）"
         result["invoice_number"] = raw.get("invoice_number")
@@ -666,6 +687,7 @@ def _is_intercity_transport(data: dict) -> bool:
     keywords = [
         "机票", "行程单", "火车票", "高铁", "动车", "船票", "轮船",
         "航空", "铁路", "汽车票", "长途客运",
+        "报销凭证", "仅供报销使用",
     ]
     if any(kw in combined for kw in keywords):
         return True
@@ -720,7 +742,7 @@ class InvoiceExtractor:
 
                 return _normalize_result(raw, inv_type)
             except Exception as e:
-                print(f"[InvoiceExtractor] extract_from_file error ({filename}): {e}")
+                print(f"[InvoiceExtractor] extract_from_file error ({filename_for_detect}): {e}")
                 return {"error": str(e), "is_transport": False}
 
     async def extract_from_base64(self, b64_data: str, filename: str) -> dict:

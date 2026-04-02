@@ -146,6 +146,18 @@ async def classify_invoice(
             _log_invoice_debug_context(invoice)
             return cat, "rule"
 
+    # 1b. 抽取阶段已选用铁路专用模板时，直接归差旅费（不依赖 invoice_subcategory）
+    detected = invoice.get("invoice_type_detected") or ""
+    if detected in ("train_electronic", "train_physical"):
+        logger.info(
+            "classify invoice_id=%s file=%s path=template_detected detected=%s -> category=travel (classified_by=rule)",
+            inv_id,
+            filename,
+            detected,
+        )
+        _log_invoice_debug_context(invoice)
+        return "travel", "rule"
+
     # 2. 规则匹配
     if use_rules:
         rule = _find_matching_rule(invoice)

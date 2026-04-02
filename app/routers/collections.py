@@ -9,7 +9,7 @@ import yaml
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, AsyncSessionLocal
@@ -71,6 +71,7 @@ def _invoice_to_dict(inv: Invoice) -> dict:
         "tax_amount": inv.tax_amount,
         "total_amount": inv.total_amount,
         "items_description": inv.items_description,
+        "remarks": inv.remarks,
         "invoice_subcategory": inv.invoice_subcategory,
         "invoice_type_detected": type_detected,
         "train_number": train_number,
@@ -134,7 +135,7 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
     async with AsyncSessionLocal() as db:
         try:
             # ── Step 0: 查询待处理发票 ────────────────────────────────────────
-            await emit(0, 5, 5, "准备中", "正在查询待处理发票…")
+            await emit(0, 4, 5, "准备中", "正在查询待处理发票…")
 
             if request.invoice_ids:
                 stmt = select(Invoice).where(Invoice.id.in_(request.invoice_ids))
@@ -145,14 +146,14 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             invoices: list[Invoice] = list(result.scalars().all())
 
             if not invoices:
-                await emit(0, 5, 100, "无可处理发票",
+                await emit(0, 4, 100, "无可处理发票",
                            "没有找到已完成信息抽取的发票，请先上传发票并等待抽取完成。",
                            status="error",
                            error="没有可处理的发票（extract_status=done）")
                 return
 
             total_inv = len(invoices)
-            await emit(0, 5, 8, "准备中", f"共找到 {total_inv} 张可处理发票")
+            await emit(0, 4, 8, "准备中", f"共找到 {total_inv} 张可处理发票")
 
             logger.info(
                 "collection task_id=%s invoices=%s force_reclassify=%s use_subcategory=%s use_rules=%s use_llm=%s",
@@ -168,7 +169,7 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             category_map = {c["id"]: c for c in categories}
 
             # ── Step 1: 发票分类（规则 + LLM）────────────────────────────────
-            await emit(1, 5, 10, "发票分类", f"开始对 {total_inv} 张发票进行分类…")
+            await emit(1, 4, 10, "发票分类", f"开始对 {total_inv} 张发票进行分类…")
 
             category_buckets: dict[str, list[Invoice]] = {c["id"]: [] for c in categories}
             category_buckets["unclassified"] = []
@@ -212,7 +213,7 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                     db.add(item)
                     method_label = "规则匹配" if classified_by == "rule" else ("AI判别" if classified_by == "llm" else "默认归类")
                     cat_name = category_map.get(cat_id, {}).get("name", cat_id)
-                    await emit(1, 5, pct, "发票分类",
+                    await emit(1, 4, pct, "发票分类",
                                f"[{i+1}/{total_inv}] {inv.filename or inv.id} → {cat_name}（{method_label}）")
                 else:
                     skip_count += 1
@@ -222,19 +223,19 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                     existing = result2.scalar_one_or_none()
                     if existing:
                         category_buckets.setdefault(existing.category_id, []).append(inv)
-                    await emit(1, 5, pct, "发票分类",
+                    await emit(1, 4, pct, "发票分类",
                                f"[{i+1}/{total_inv}] {inv.filename or inv.id} — 已有分类，跳过")
 
             await db.flush()
 
             summary = f"分类完成：规则匹配 {rule_count} 张，AI判别 {llm_count} 张，跳过 {skip_count} 张"
-            await emit(1, 5, 65, "发票分类", summary)
+            await emit(1, 4, 65, "发票分类", summary)
             logger.info("collection task_id=%s classify_summary %s", task_id, summary)
 
-            # ── Step 2: 差旅闭环分组 ──────────────────────────────────────────
+            # ── Step 2: 分组（差旅闭环 + 会议等可分组大类）──────────────────────
             travel_invoices = category_buckets.get("travel", [])
-            await emit(2, 5, 68, "差旅闭环分组",
-                       f"共 {len(travel_invoices)} 张差旅费发票，开始检测闭环…")
+            await emit(2, 4, 68, "分组",
+                       f"差旅：共 {len(travel_invoices)} 张发票，开始行程/闭环检测…")
 
             if travel_invoices:
                 travel_dicts = [_invoice_to_dict(inv) for inv in travel_invoices]
@@ -243,13 +244,22 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 old_groups = await db.execute(
                     select(CollectionGroup).where(CollectionGroup.category_id == "travel")
                 )
-                for g in old_groups.scalars().all():
+                old_travel_group_list = list(old_groups.scalars().all())
+                if old_travel_group_list:
+                    old_gids = [g.id for g in old_travel_group_list]
+                    await db.execute(
+                        update(CollectionItem)
+                        .where(CollectionItem.group_id.in_(old_gids))
+                        .values(group_id=None)
+                    )
+                    await db.flush()
+                for g in old_travel_group_list:
                     await db.delete(g)
                 await db.flush()
 
                 closed = sum(1 for l in loops if l.is_closed)
-                await emit(2, 5, 72, "差旅闭环分组",
-                           f"检测到 {len(loops)} 个行程组（其中 {closed} 个完整闭环）")
+                await emit(2, 4, 72, "分组",
+                           f"差旅：检测到 {len(loops)} 个行程组（其中 {closed} 个完整闭环）")
                 logger.info(
                     "collection task_id=%s travel_groups=%s closed_loops=%s",
                     task_id,
@@ -278,15 +288,14 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                             ci.group_id = group.id
 
                     loop_label = "✓闭环" if loop.is_closed else "行程"
-                    await emit(2, 5, 72 + idx, "差旅闭环分组",
-                               f"  {loop_label}：{group.name}（{len(loop.all_invoice_ids)} 张）")
+                    await emit(2, 4, min(76 + idx, 79), "分组",
+                               f"  差旅 {loop_label}：{group.name}（{len(loop.all_invoice_ids)} 张）")
             else:
-                await emit(2, 5, 75, "差旅闭环分组", "无差旅费发票，跳过")
+                await emit(2, 4, 75, "分组", "差旅：无差旅费发票，跳过")
 
-            # ── Step 3: 会议分组 ──────────────────────────────────────────────
             meeting_invoices = category_buckets.get("meeting", [])
-            await emit(3, 5, 78, "会议分组",
-                       f"共 {len(meeting_invoices)} 张会议费发票，开始分组…")
+            await emit(2, 4, 80, "分组",
+                       f"会议：共 {len(meeting_invoices)} 张发票，开始分组…")
 
             if meeting_invoices:
                 meeting_dicts = [_invoice_to_dict(inv) for inv in meeting_invoices]
@@ -295,7 +304,16 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 old_groups = await db.execute(
                     select(CollectionGroup).where(CollectionGroup.category_id == "meeting")
                 )
-                for g in old_groups.scalars().all():
+                old_meeting_group_list = list(old_groups.scalars().all())
+                if old_meeting_group_list:
+                    old_mgids = [g.id for g in old_meeting_group_list]
+                    await db.execute(
+                        update(CollectionItem)
+                        .where(CollectionItem.group_id.in_(old_mgids))
+                        .values(group_id=None)
+                    )
+                    await db.flush()
+                for g in old_meeting_group_list:
                     await db.delete(g)
                 await db.flush()
 
@@ -319,23 +337,23 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                         if ci:
                             ci.group_id = group.id
 
-                await emit(3, 5, 88, "会议分组",
-                           f"识别出 {len(meeting_groups)} 个会议分组")
+                await emit(2, 4, 88, "分组",
+                           f"会议：识别出 {len(meeting_groups)} 个分组")
                 logger.info(
                     "collection task_id=%s meeting_groups=%s",
                     task_id,
                     len(meeting_groups),
                 )
             else:
-                await emit(3, 5, 88, "会议分组", "无会议费发票，跳过")
+                await emit(2, 4, 88, "分组", "会议：无会议费发票，跳过")
 
-            # ── Step 4: 提交保存 ──────────────────────────────────────────────
-            await emit(4, 5, 92, "保存结果", "正在写入数据库…")
+            # ── Step 3: 提交保存 ──────────────────────────────────────────────
+            await emit(3, 4, 92, "保存结果", "正在写入数据库…")
             await db.commit()
-            await emit(4, 5, 98, "保存结果", "数据库写入完成")
+            await emit(3, 4, 98, "保存结果", "数据库写入完成")
 
             # ── Done ──────────────────────────────────────────────────────────
-            await emit(5, 5, 100,
+            await emit(4, 4, 100,
                        "归集完成",
                        f"成功处理 {total_inv} 张发票，结果已更新",
                        status="done")
@@ -349,7 +367,7 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             tb = traceback.format_exc()
             logger.exception("collection task_id=%s failed: %s", task_id, exc)
             await progress_manager.emit(task_id, ProgressEvent(
-                step=0, total=5, percent=0,
+                step=0, total=4, percent=0,
                 title="归集出错",
                 message=str(exc),
                 status="error",

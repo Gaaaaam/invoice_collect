@@ -57,8 +57,9 @@ class CollectionGroup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
+    # 禁止级联删除 CollectionItem：重建行程/会议分组时只删分组记录，发票归类必须保留
     items: Mapped[list["CollectionItem"]] = relationship(
-        "CollectionItem", back_populates="group", cascade="all, delete-orphan"
+        "CollectionItem", back_populates="group"
     )
 
 
@@ -70,7 +71,7 @@ class CollectionItem(Base):
     invoice_id: Mapped[int] = mapped_column(Integer, ForeignKey("invoices.id"), unique=True)
     category_id: Mapped[str] = mapped_column(String(50))
     group_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("collection_groups.id"), nullable=True
+        Integer, ForeignKey("collection_groups.id", ondelete="SET NULL"), nullable=True
     )
     classified_by: Mapped[str] = mapped_column(String(20), default="pending")
     classified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

@@ -47,10 +47,12 @@ class LLMClient:
 费用大类列表：
 {category_list}
 
+判断要点：火车票、高铁票、动车票、铁路电子客票、印有「报销凭证」「仅供报销使用」的铁路纸质报销凭证、机票行程单、住宿费、网约车/出租车等城市间或出差交通，一律归为 travel（差旅费）；会议相关归为 meeting；办公耗材与原材料归为 material；其余归为 other。
+
 发票信息：
 {invoice_summary}
 
-请直接返回费用大类的 id（如 travel、meeting、material、other），不要包含任何其他内容。"""
+请直接返回费用大类的 id（仅 travel、meeting、material、other 之一），不要包含任何其他文字或标点。"""
 
         try:
             response = await self.client.chat.completions.create(
@@ -162,9 +164,12 @@ class LLMClient:
             ("销售方", data.get("seller_name")),
             ("购买方", data.get("buyer_name")),
             ("货物/服务描述", data.get("items_description")),
+            ("备注", data.get("remarks")),
             ("价税合计", data.get("total_amount")),
+            ("车次/航班", data.get("train_number")),
             ("出发城市", data.get("departure_city")),
             ("到达城市", data.get("arrival_city")),
+            ("抽取识别类型", data.get("invoice_type_detected")),
         ]
         return "\n".join(f"{k}: {v}" for k, v in fields if v)
 
