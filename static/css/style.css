@@ -218,7 +218,7 @@ body {
 .board-container {
   flex: 1;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
   padding: 16px;
   display: flex;
   gap: 14px;
@@ -231,7 +231,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 100%;
+  align-self: stretch;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -256,6 +257,12 @@ body {
 
 .col-title { font-weight: 600; font-size: 14px; flex: 1; }
 .col-amount { font-size: 12px; color: var(--gray-500); }
+.col-select-btn {
+  margin-top: 0;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+}
 
 /* ─── Group Card ─────────────────────────────────────────────────────────────── */
 .group-card {
@@ -283,10 +290,36 @@ body {
 .group-count { font-size: 11px; color: var(--gray-400); }
 .group-toggle { font-size: 12px; color: var(--gray-400); transition: transform .2s; }
 .group-toggle.collapsed { transform: rotate(-90deg); }
+.group-select-btn {
+  border: 1px solid var(--gray-300);
+  background: #fff;
+  color: var(--gray-600);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.group-select-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.group-select-btn.active {
+  border-color: var(--primary);
+  color: #fff;
+  background: var(--primary);
+}
+.group-select-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
 
 .group-body {
   padding: 6px;
   min-height: 40px;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 .group-body.collapsed { display: none; }
 

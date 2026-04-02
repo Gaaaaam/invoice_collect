@@ -12,6 +12,7 @@ const state = {
   sortableInstances: [], // SortableJS 实例引用（便于销毁重建）
   selectedInvoiceIds: new Set(), // 看板中多选的发票
   selectionAnchorId: null, // Shift 多选锚点
+  lang: localStorage.getItem('invoice_collect_lang') || 'zh',
 };
 
 let _dragContext = null; // 记录拖拽开始时的选择上下文
@@ -23,11 +24,85 @@ const CAT_ICONS = {
 const CAT_COLORS = {
   travel: 'travel', meeting: 'meeting', material: 'material', other: 'other',
 };
-// 分类方式标签
-const CLASSIFIED_BY_LABELS = {
-  rule: ['tag-rule', '规则'], llm: ['tag-llm', 'AI'], manual: ['tag-manual', '手动'],
-  default: ['tag-default', '默认'], pending: ['tag-default', '待处理'],
+const CATEGORY_NAME_I18N = {
+  travel: { zh: '差旅费', en: 'Travel' },
+  meeting: { zh: '会议费', en: 'Meeting' },
+  material: { zh: '材料费', en: 'Materials' },
+  other: { zh: '其他费用', en: 'Other' },
 };
+// 分类方式标签
+const I18N = {
+  zh: {
+    appTitle: '发票归集系统', btnProcess: '开始归集', processOptions: '归集选项', config: '配置',
+    uploadedInvoices: '已上传发票', uploadHint: '点击或拖拽上传发票', uploadSupport: '支持 PDF、图片、OFD',
+    noInvoices: '暂无发票，请先上传', selectedCount: '已选 {count} 张', totalBadge: '共 {count} 张发票',
+    clearSelection: '清空选择', batchDelete: '批量删除', batchDeleteSelected: '批量删除已选发票',
+    classificationMethods: '分类方式', methodContentAnalysis: '内容分析', methodContentAnalysisHint: '从项目名称/备注推断费用类型',
+    methodRuleMatch: '规则匹配', methodRuleMatchHint: '依据 rules.yml 中的自定义规则',
+    methodLLM: '大模型（LLM）', methodLLMHint: '当内容分析和规则均未命中时使用',
+    forceReclassify: '强制重新分类', forceReclassifyHint: '对已分类的发票也重新执行',
+    statusDone: '已抽取', statusPending: '待抽取', statusError: '抽取失败',
+    loadingProcessing: '处理中...', loadingUploadExtract: '上传并抽取发票信息...',
+    uploadSuccess: '成功上传 {count} 张发票', uploadFailed: '上传失败：{error}',
+    emptyBoard: '点击「开始归集」按钮对发票进行自动归集分类',
+    ungrouped: '未分组', addGroup: '＋ 新建分组', dropHere: '拖拽发票到此处',
+    unclassified: '未分类', invoiceCount: '{count} 张', unknownType: '未知类型',
+    tagRule: '规则', tagAI: 'AI', tagManual: '手动', tagDefault: '默认', tagPending: '待处理',
+    selectGroup: '选中({count})', unselectGroup: '取消({count})', selectGroupTitle: '选中本组发票',
+    unselectGroupTitle: '取消选中本组发票', noGroupInvoice: '该分组暂无发票',
+    noGroupInvoiceWarn: '该分组暂无可选择的发票', viewDetail: '查看详情', delete: '删除',
+    selectCategoryTitle: '选中该费用类型全部发票', unselectCategoryTitle: '取消选中该费用类型全部发票',
+    confirmBatchDelete: '确认删除选中的 {count} 张发票？此操作不可撤销。', batchDeleteOk: '已删除 {count} 张发票',
+    batchDeleteFail: '批量删除失败：{error}', languageSwitchTitle: '切换语言',
+    requestFailed: '请求失败',
+  },
+  en: {
+    appTitle: 'Invoice Collection System', btnProcess: 'Start Collection', processOptions: 'Collection Options', config: 'Settings',
+    uploadedInvoices: 'Uploaded Invoices', uploadHint: 'Click or drag files to upload', uploadSupport: 'Supports PDF, images, OFD',
+    noInvoices: 'No invoices yet, please upload first', selectedCount: 'Selected {count}', totalBadge: '{count} invoices',
+    clearSelection: 'Clear Selection', batchDelete: 'Batch Delete', batchDeleteSelected: 'Delete selected invoices',
+    classificationMethods: 'Classification Methods', methodContentAnalysis: 'Content Analysis', methodContentAnalysisHint: 'Infer expense type from item name/remarks',
+    methodRuleMatch: 'Rule Matching', methodRuleMatchHint: 'Use custom rules in rules.yml',
+    methodLLM: 'LLM', methodLLMHint: 'Fallback when analysis/rules do not match',
+    forceReclassify: 'Force Reclassify', forceReclassifyHint: 'Reclassify already-classified invoices',
+    statusDone: 'Extracted', statusPending: 'Pending', statusError: 'Failed',
+    loadingProcessing: 'Processing...', loadingUploadExtract: 'Uploading and extracting invoice data...',
+    uploadSuccess: 'Uploaded {count} invoice(s)', uploadFailed: 'Upload failed: {error}',
+    emptyBoard: 'Click "Start Collection" to classify invoices',
+    ungrouped: 'Ungrouped', addGroup: '+ New Group', dropHere: 'Drag invoices here',
+    unclassified: 'Unclassified', invoiceCount: '{count}', unknownType: 'Unknown type',
+    tagRule: 'Rule', tagAI: 'AI', tagManual: 'Manual', tagDefault: 'Default', tagPending: 'Pending',
+    selectGroup: 'Select({count})', unselectGroup: 'Unselect({count})', selectGroupTitle: 'Select this group',
+    unselectGroupTitle: 'Unselect this group', noGroupInvoice: 'No invoices in this group',
+    noGroupInvoiceWarn: 'No invoice to select in this group', viewDetail: 'View', delete: 'Delete',
+    selectCategoryTitle: 'Select all invoices in this category', unselectCategoryTitle: 'Unselect all invoices in this category',
+    confirmBatchDelete: 'Delete selected {count} invoice(s)? This action cannot be undone.', batchDeleteOk: 'Deleted {count} invoice(s)',
+    batchDeleteFail: 'Batch delete failed: {error}', languageSwitchTitle: 'Switch language',
+    requestFailed: 'Request failed',
+  },
+};
+
+function t(key, vars = {}) {
+  const langPack = I18N[state.lang] || I18N.zh;
+  const template = langPack[key] ?? I18N.zh[key] ?? key;
+  return String(template).replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`));
+}
+
+function classifiedByLabels() {
+  return {
+    rule: ['tag-rule', t('tagRule')],
+    llm: ['tag-llm', t('tagAI')],
+    manual: ['tag-manual', t('tagManual')],
+    default: ['tag-default', t('tagDefault')],
+    pending: ['tag-default', t('tagPending')],
+  };
+}
+
+function displayCategoryName(categoryId, fallbackName = '') {
+  const key = CATEGORY_NAME_I18N[categoryId];
+  if (key) return key[state.lang] || fallbackName || categoryId;
+  return fallbackName || categoryId;
+}
 // 发票类型图标
 function invoiceIcon(type) {
   if (!type) return '🧾';
@@ -51,7 +126,7 @@ async function api(method, path, body) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || '请求失败');
+    throw new Error(err.detail || t('requestFailed'));
   }
   return res.json();
 }
@@ -66,7 +141,7 @@ function toast(msg, type = '') {
 }
 
 // ─── Loading ──────────────────────────────────────────────────────────────────
-function showLoading(text = '处理中...') {
+function showLoading(text = t('loadingProcessing')) {
   document.getElementById('loadingText').textContent = text;
   document.getElementById('loadingOverlay').classList.remove('hidden');
 }
@@ -104,7 +179,6 @@ function switchTab(activeId) {
 const uploadZone = document.getElementById('uploadZone');
 const fileInput = document.getElementById('fileInput');
 
-document.getElementById('btnUploadTrigger').addEventListener('click', () => fileInput.click());
 uploadZone.addEventListener('click', () => fileInput.click());
 
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
@@ -121,14 +195,14 @@ async function handleFiles(files) {
   const formData = new FormData();
   for (const f of files) formData.append('files', f);
 
-  showLoading('上传并抽取发票信息...');
+  showLoading(t('loadingUploadExtract'));
   try {
     const uploaded = await fetch('/api/invoices/upload', { method: 'POST', body: formData })
       .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail)));
-    toast(`成功上传 ${uploaded.length} 张发票`, 'success');
+    toast(t('uploadSuccess', { count: uploaded.length }), 'success');
     await loadInvoices();
   } catch (e) {
-    toast(`上传失败：${e}`, 'error');
+    toast(t('uploadFailed', { error: e }), 'error');
   } finally {
     hideLoading();
     fileInput.value = '';
@@ -145,7 +219,7 @@ async function loadInvoices() {
 function renderInvoiceList() {
   const el = document.getElementById('invoiceList');
   if (!state.invoices.length) {
-    el.innerHTML = '<div class="empty-state">暂无发票，请先上传</div>';
+    el.innerHTML = `<div class="empty-state">${t('noInvoices')}</div>`;
     return;
   }
   el.innerHTML = state.invoices.map(inv => `
@@ -164,11 +238,11 @@ function renderInvoiceList() {
 }
 
 function statusLabel(s) {
-  return { done: '已抽取', pending: '待抽取', error: '抽取失败' }[s] || s;
+  return { done: t('statusDone'), pending: t('statusPending'), error: t('statusError') }[s] || s;
 }
 
 function updateTotalBadge() {
-  document.getElementById('totalBadge').textContent = `共 ${state.invoices.length} 张发票`;
+  document.getElementById('totalBadge').textContent = t('totalBadge', { count: state.invoices.length });
 }
 
 function getVisibleInvCardIds() {
@@ -205,9 +279,84 @@ function refreshSelectionUI() {
   const badge = document.getElementById('selectedCountBadge');
   const clearBtn = document.getElementById('btnClearSelection');
   const delBtn = document.getElementById('btnBatchDelete');
-  badge.textContent = `已选 ${selectedCount} 张`;
+  badge.textContent = t('selectedCount', { count: selectedCount });
   clearBtn.disabled = selectedCount === 0;
   delBtn.disabled = selectedCount === 0;
+
+  // 同步分组级选择按钮状态（用于按组批量删除）
+  document.querySelectorAll('.group-select-btn').forEach(btn => {
+    const categoryId = btn.dataset.category || '';
+    const groupId = btn.dataset.group || '';
+    const ids = getGroupInvoiceIds(categoryId, groupId);
+    const selectedInGroup = ids.filter(id => state.selectedInvoiceIds.has(id)).length;
+    const allSelected = ids.length > 0 && selectedInGroup === ids.length;
+    btn.classList.toggle('active', allSelected);
+    btn.disabled = ids.length === 0;
+    btn.textContent = allSelected ? t('unselectGroup', { count: selectedInGroup }) : t('selectGroup', { count: ids.length });
+    btn.title = ids.length === 0
+      ? t('noGroupInvoice')
+      : (allSelected ? t('unselectGroupTitle') : t('selectGroupTitle'));
+  });
+
+  // 同步大类级选择框状态（用于按费用类型批量选择）
+  document.querySelectorAll('.col-select-btn').forEach(btn => {
+    const categoryId = btn.dataset.category || '';
+    const ids = getCategoryInvoiceIds(categoryId);
+    const selectedInCategory = ids.filter(id => state.selectedInvoiceIds.has(id)).length;
+    const allSelected = ids.length > 0 && selectedInCategory === ids.length;
+    btn.classList.toggle('active', allSelected);
+    btn.setAttribute('aria-pressed', allSelected ? 'true' : 'false');
+    btn.disabled = ids.length === 0;
+    btn.title = allSelected ? t('unselectCategoryTitle') : t('selectCategoryTitle');
+  });
+}
+
+function getGroupInvoiceIds(categoryId, groupId = '') {
+  const targetCategory = String(categoryId || '');
+  const targetGroup = String(groupId || '');
+  const zone = Array.from(document.querySelectorAll('.drop-zone')).find(el =>
+    (el.dataset.category || '') === targetCategory && (el.dataset.group || '') === targetGroup
+  );
+  if (!zone) return [];
+  return Array.from(zone.querySelectorAll('.inv-card'))
+    .map(el => parseInt(el.dataset.id))
+    .filter(Number.isFinite);
+}
+
+function getCategoryInvoiceIds(categoryId) {
+  const targetCategory = String(categoryId || '');
+  return Array.from(document.querySelectorAll(`.drop-zone[data-category="${targetCategory}"] .inv-card`))
+    .map(el => parseInt(el.dataset.id))
+    .filter(Number.isFinite);
+}
+
+function toggleGroupSelect(event, categoryId, groupId = '') {
+  event.stopPropagation();
+  const ids = getGroupInvoiceIds(categoryId, groupId);
+  if (!ids.length) {
+    toast(t('noGroupInvoiceWarn'), 'warning');
+    return;
+  }
+  const allSelected = ids.every(id => state.selectedInvoiceIds.has(id));
+  ids.forEach(id => {
+    if (allSelected) state.selectedInvoiceIds.delete(id);
+    else state.selectedInvoiceIds.add(id);
+  });
+  state.selectionAnchorId = ids[ids.length - 1] || null;
+  refreshSelectionUI();
+}
+
+function toggleCategorySelect(event, categoryId) {
+  event.stopPropagation();
+  const ids = getCategoryInvoiceIds(categoryId);
+  if (!ids.length) return;
+  const allSelected = ids.every(id => state.selectedInvoiceIds.has(id));
+  ids.forEach(id => {
+    if (allSelected) state.selectedInvoiceIds.delete(id);
+    else state.selectedInvoiceIds.add(id);
+  });
+  state.selectionAnchorId = ids[ids.length - 1] || null;
+  refreshSelectionUI();
 }
 
 function handleInvCardClick(event, invoiceId) {
@@ -241,15 +390,15 @@ function toggleInvSelect(event, invoiceId) {
 async function batchDeleteSelectedInvoices() {
   const ids = Array.from(state.selectedInvoiceIds);
   if (!ids.length) return;
-  if (!confirm(`确认删除选中的 ${ids.length} 张发票？此操作不可撤销。`)) return;
+  if (!confirm(t('confirmBatchDelete', { count: ids.length }))) return;
 
   try {
     await api('POST', '/api/invoices/batch-delete', { invoice_ids: ids });
-    toast(`已删除 ${ids.length} 张发票`, 'success');
+    toast(t('batchDeleteOk', { count: ids.length }), 'success');
     clearSelection();
     await Promise.all([loadInvoices(), loadCollectionResult()]);
   } catch (e) {
-    toast(`批量删除失败：${e}`, 'error');
+    toast(t('batchDeleteFail', { error: e }), 'error');
   }
 }
 
@@ -283,7 +432,7 @@ document.getElementById('btnClearSelection').addEventListener('click', clearSele
 document.getElementById('btnBatchDelete').addEventListener('click', batchDeleteSelectedInvoices);
 
 document.getElementById('btnProcess').addEventListener('click', async () => {
-  if (!state.invoices.length) { toast('请先上传发票', 'warning'); return; }
+  if (!state.invoices.length) { toast(t('noInvoices'), 'warning'); return; }
   // 关闭选项面板
   document.getElementById('processOptionsPanel').classList.add('hidden');
 
@@ -470,7 +619,7 @@ function renderBoard() {
   });
 
   if (!cols.length) {
-    board.innerHTML = '<div class="empty-state" style="margin:auto;padding:60px">点击「开始归集」按钮对发票进行自动归集分类</div>';
+    board.innerHTML = `<div class="empty-state" style="margin:auto;padding:60px">${t('emptyBoard')}</div>`;
     return;
   }
 
@@ -522,31 +671,41 @@ function renderCategoryCol(cat) {
       <div class="group-card">
         <div class="group-header" onclick="toggleGroup(this)">
           <span class="group-icon">📄</span>
-          <span class="group-name">未分组</span>
-          <span class="group-count">${cat.ungrouped_invoices?.length || 0} 张</span>
+          <span class="group-name">${t('ungrouped')}</span>
+          <span class="group-count">${t('invoiceCount', { count: cat.ungrouped_invoices?.length || 0 })}</span>
+          <button class="group-select-btn"
+                  data-category="${cat.category_id}"
+                  data-group=""
+                  onclick="toggleGroupSelect(event, '${cat.category_id}', '')"
+                  title="${t('selectGroupTitle')}">${t('selectGroup', { count: cat.ungrouped_invoices?.length || 0 })}</button>
           <span class="group-toggle">▼</span>
         </div>
         <div class="group-body drop-zone" data-category="${cat.category_id}" data-group="">
           ${cat.ungrouped_invoices?.map(inv => renderInvCard(inv, cat.category_id, null)).join('') || ''}
-          ${!cat.ungrouped_invoices?.length ? '<div class="empty-state">拖拽发票到此处</div>' : ''}
+          ${!cat.ungrouped_invoices?.length ? `<div class="empty-state">${t('dropHere')}</div>` : ''}
         </div>
       </div>`;
     // 新建分组按钮
-    bodyHtml += `<button class="add-rule-btn" onclick="openCreateGroup('${cat.category_id}')">＋ 新建分组</button>`;
+    bodyHtml += `<button class="add-rule-btn" onclick="openCreateGroup('${cat.category_id}')">${t('addGroup')}</button>`;
   } else {
     // 无分组（材料费/其他）
     bodyHtml = `
       <div class="col-drop-zone drop-zone" data-category="${cat.category_id}" data-group="">
         ${cat.ungrouped_invoices?.map(inv => renderInvCard(inv, cat.category_id, null)).join('') || ''}
-        ${!cat.ungrouped_invoices?.length ? '<div class="empty-state">拖拽发票到此处</div>' : ''}
+        ${!cat.ungrouped_invoices?.length ? `<div class="empty-state">${t('dropHere')}</div>` : ''}
       </div>`;
   }
 
   return `
     <div class="board-col" id="col-${cat.category_id}">
       <div class="col-header ${colorClass}">
+        <button class="col-select-btn inv-select-btn"
+                data-category="${cat.category_id}"
+                onclick="toggleCategorySelect(event, '${cat.category_id}')"
+                title="${t('selectCategoryTitle')}"
+                aria-pressed="false">✓</button>
         <span style="font-size:16px">${icon}</span>
-        <span class="col-title">${escHtml(cat.category_name)}</span>
+        <span class="col-title">${escHtml(displayCategoryName(cat.category_id, cat.category_name))}</span>
         <span class="col-amount">${totalAmt}</span>
       </div>
       ${bodyHtml}
@@ -564,7 +723,12 @@ function renderGroupCard(group, cat) {
         <span class="group-icon">${icon}</span>
         <span class="group-name" ondblclick="renameGroup(${group.id}, this)">${escHtml(group.name)}</span>
         ${dateRange ? `<span class="group-count text-muted" style="font-size:10px">${dateRange}</span>` : ''}
-        <span class="group-count">${group.invoices.length} 张</span>
+        <span class="group-count">${t('invoiceCount', { count: group.invoices.length })}</span>
+        <button class="group-select-btn"
+                data-category="${cat.category_id}"
+                data-group="${group.id}"
+                onclick="toggleGroupSelect(event, '${cat.category_id}', '${group.id}')"
+                title="${t('selectGroupTitle')}">${t('selectGroup', { count: group.invoices.length })}</button>
         <span class="group-toggle">▼</span>
       </div>
       <div class="group-body drop-zone" data-category="${cat.category_id}" data-group="${group.id}">
@@ -578,8 +742,8 @@ function renderUnclassifiedCol(invoices) {
     <div class="board-col" id="col-unclassified">
       <div class="col-header unclassified">
         <span style="font-size:16px">❓</span>
-        <span class="col-title">未分类</span>
-        <span class="col-amount">${invoices.length} 张</span>
+        <span class="col-title">${t('unclassified')}</span>
+        <span class="col-amount">${t('invoiceCount', { count: invoices.length })}</span>
       </div>
       <div class="col-drop-zone drop-zone" data-category="unclassified" data-group="">
         ${invoices.map(inv => renderInvCard(inv, 'unclassified', null)).join('')}
@@ -588,7 +752,8 @@ function renderUnclassifiedCol(invoices) {
 }
 
 function renderInvCard(inv, categoryId, groupId) {
-  const [tagClass, tagLabel] = CLASSIFIED_BY_LABELS[inv.classified_by] || CLASSIFIED_BY_LABELS.default;
+  const labels = classifiedByLabels();
+  const [tagClass, tagLabel] = labels[inv.classified_by] || labels.default;
   const amt = inv.total_amount != null ? `¥${Number(inv.total_amount).toFixed(2)}` : '';
   const date = (inv.issue_date || '').slice(0, 10);
   const selectedClass = state.selectedInvoiceIds.has(inv.id) ? 'selected' : '';
@@ -604,7 +769,7 @@ function renderInvCard(inv, categoryId, groupId) {
               title="选择/取消选择">✓</button>
       <div class="inv-icon">${invoiceIcon(inv.invoice_type)}</div>
       <div class="inv-body">
-        <div class="inv-type">${escHtml(inv.invoice_type || inv.filename || '未知类型')}</div>
+        <div class="inv-type">${escHtml(inv.invoice_type || inv.filename || t('unknownType'))}</div>
         <div class="inv-seller">${escHtml(inv.seller_name || '')}</div>
         <div class="inv-row">
           <span class="inv-date">${date}</span>
@@ -613,8 +778,8 @@ function renderInvCard(inv, categoryId, groupId) {
         <span class="inv-tag ${tagClass}">${tagLabel}</span>
       </div>
       <div class="inv-actions">
-        <button onclick="showInvDetail(${inv.id}); event.stopPropagation();" title="查看详情">🔍</button>
-        <button onclick="deleteInvoice(${inv.id}); event.stopPropagation();" title="删除">🗑️</button>
+        <button onclick="showInvDetail(${inv.id}); event.stopPropagation();" title="${t('viewDetail')}">🔍</button>
+        <button onclick="deleteInvoice(${inv.id}); event.stopPropagation();" title="${t('delete')}">🗑️</button>
       </div>
     </div>`;
 }
@@ -719,7 +884,7 @@ function ensureDropZoneEmptyState(zone) {
   if (hasCards && empty) {
     empty.remove();
   } else if (!hasCards && !empty) {
-    zone.insertAdjacentHTML('beforeend', '<div class="empty-state">拖拽发票到此处</div>');
+    zone.insertAdjacentHTML('beforeend', `<div class="empty-state">${t('dropHere')}</div>`);
   }
 }
 
@@ -948,9 +1113,10 @@ function renderCategoryEditor(categories) {
         </div>
         <div class="form-group" style="flex:0.5">
           <label class="form-label">支持分组</label>
-          <select class="form-select" data-cat-idx="${i}" data-field="groupable">
-            <option value="true" ${c.groupable ? 'selected' : ''}>是</option>
-            <option value="false" ${!c.groupable ? 'selected' : ''}>否</option>
+          <select class="form-select" data-cat-idx="${i}" data-field="groupable" ${c.id !== 'other' ? 'disabled' : ''}>
+            ${c.id === 'other'
+              ? '<option value="false" selected>否（其他费用固定不分组）</option>'
+              : '<option value="true" selected>是（默认支持分组）</option>'}
           </select>
         </div>
       </div>
@@ -958,11 +1124,14 @@ function renderCategoryEditor(categories) {
 }
 
 function addCategory() {
-  state.categories.push({ id: `cat_${Date.now()}`, name: '新大类', groupable: false, description: '' });
+  state.categories.push({ id: `cat_${Date.now()}`, name: '新大类', groupable: true, description: '' });
   renderCategoryEditor(state.categories);
 }
 
 function removeCategory(idx) {
+  const category = state.categories[idx];
+  const categoryName = category?.name || `第 ${idx + 1} 个大类`;
+  if (!confirm(`确认删除费用大类「${categoryName}」吗？`)) return;
   state.categories.splice(idx, 1);
   renderCategoryEditor(state.categories);
 }
@@ -973,7 +1142,8 @@ function collectCategories() {
     const name = item.querySelector('[data-field="name"]').value.trim();
     const id = item.querySelector('[data-field="id"]').value.trim();
     const desc = item.querySelector('[data-field="description"]')?.value.trim() || '';
-    const groupable = item.querySelector('[data-field="groupable"]')?.value === 'true';
+    const isOther = id === 'other';
+    const groupable = isOther ? false : (item.querySelector('[data-field="groupable"]')?.value === 'true');
     return { id, name, groupable, description: desc };
   });
 }
@@ -1036,6 +1206,9 @@ function addRule() {
 }
 
 function removeRule(idx) {
+  const rule = state.rules[idx];
+  const ruleName = rule?.name || `第 ${idx + 1} 条规则`;
+  if (!confirm(`确认删除分类规则「${ruleName}」吗？`)) return;
   state.rules.splice(idx, 1);
   renderRuleEditor(state.rules);
 }
@@ -1121,15 +1294,50 @@ function escHtml(str) {
 }
 function escAttr(str) { return escHtml(str); }
 
+function applyLanguage() {
+  document.documentElement.lang = state.lang === 'en' ? 'en' : 'zh-CN';
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    if (key) el.textContent = t(key);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    const key = el.dataset.i18nTitle;
+    if (key) el.setAttribute('title', t(key));
+  });
+
+  const clearBtn = document.getElementById('btnClearSelection');
+  const delBtn = document.getElementById('btnBatchDelete');
+  const langLabel = document.getElementById('langToggleLabel');
+  if (clearBtn) clearBtn.textContent = t('clearSelection');
+  if (delBtn) delBtn.textContent = t('batchDelete');
+  if (langLabel) langLabel.textContent = state.lang === 'zh' ? 'EN' : '中文';
+  document.getElementById('btnLangToggle')?.setAttribute('title', t('languageSwitchTitle'));
+
+  updateTotalBadge();
+  refreshSelectionUI();
+  renderInvoiceList();
+  renderBoard();
+}
+
+function switchLanguage() {
+  state.lang = state.lang === 'zh' ? 'en' : 'zh';
+  localStorage.setItem('invoice_collect_lang', state.lang);
+  applyLanguage();
+}
+
+document.getElementById('btnLangToggle')?.addEventListener('click', switchLanguage);
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async function init() {
   try {
+    applyLanguage();
     // 加载大类配置（用于拖拽逻辑中的验证）
     const cats = await api('GET', '/api/config/categories');
     state.categories = cats.categories;
 
     await loadInvoices();
     await loadCollectionResult();
+    applyLanguage();
   } catch (e) {
     console.error('初始化失败：', e);
   }

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>发票归集系统</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260401b" />
+  <title data-i18n="appTitle">发票归集系统</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260402e" />
 </head>
 <body>
 
@@ -17,17 +17,13 @@
       <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
       <polyline points="10 9 9 9 8 9"/>
     </svg>
-    发票归集系统
+    <span data-i18n="appTitle">发票归集系统</span>
   </div>
 
   <div class="header-divider"></div>
 
-  <button class="btn btn-outline btn-icon" id="btnUploadTrigger" title="上传发票">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-      <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-    </svg>
-    上传发票
+  <button class="btn btn-outline btn-icon" id="btnLangToggle" title="切换语言">
+    🌐 <span id="langToggleLabel">EN</span>
   </button>
 
   <div class="process-btn-group" id="processBtnGroup">
@@ -35,43 +31,43 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
       </svg>
-      开始归集
+      <span data-i18n="btnProcess">开始归集</span>
     </button>
-    <button class="btn btn-success btn-process-caret" id="btnProcessCaret" title="归集选项" onclick="toggleProcessOptions(event)">
+    <button class="btn btn-success btn-process-caret" id="btnProcessCaret" title="归集选项" data-i18n-title="processOptions" onclick="toggleProcessOptions(event)">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <polyline points="6 9 12 15 18 9"/>
       </svg>
     </button>
     <!-- 归集选项下拉面板 -->
     <div class="process-options-panel hidden" id="processOptionsPanel">
-      <div class="options-panel-title">分类方式</div>
+      <div class="options-panel-title" data-i18n="classificationMethods">分类方式</div>
       <label class="options-check-row">
         <input type="checkbox" id="optSubcategory" checked />
         <span>
-          <strong>内容分析</strong>
-          <span class="options-hint">从项目名称/备注推断费用类型</span>
+          <strong data-i18n="methodContentAnalysis">内容分析</strong>
+          <span class="options-hint" data-i18n="methodContentAnalysisHint">从项目名称/备注推断费用类型</span>
         </span>
       </label>
       <label class="options-check-row">
         <input type="checkbox" id="optRules" checked />
         <span>
-          <strong>规则匹配</strong>
-          <span class="options-hint">依据 rules.yml 中的自定义规则</span>
+          <strong data-i18n="methodRuleMatch">规则匹配</strong>
+          <span class="options-hint" data-i18n="methodRuleMatchHint">依据 rules.yml 中的自定义规则</span>
         </span>
       </label>
       <label class="options-check-row">
         <input type="checkbox" id="optLLM" checked />
         <span>
-          <strong>大模型（LLM）</strong>
-          <span class="options-hint">当内容分析和规则均未命中时使用</span>
+          <strong data-i18n="methodLLM">大模型（LLM）</strong>
+          <span class="options-hint" data-i18n="methodLLMHint">当内容分析和规则均未命中时使用</span>
         </span>
       </label>
       <div class="options-divider"></div>
       <label class="options-check-row">
         <input type="checkbox" id="optForceReclassify" />
         <span>
-          <strong>强制重新分类</strong>
-          <span class="options-hint">对已分类的发票也重新执行</span>
+          <strong data-i18n="forceReclassify">强制重新分类</strong>
+          <span class="options-hint" data-i18n="forceReclassifyHint">对已分类的发票也重新执行</span>
         </span>
       </label>
     </div>
@@ -84,13 +80,13 @@
       <circle cx="12" cy="12" r="3"/>
       <path d="M19.07 4.93a10 10 0 0 0-14.14 0M4.93 19.07a10 10 0 0 0 14.14 0M12 2v2m0 18v2M2 12h2m18 0h2"/>
     </svg>
-    配置
+    <span data-i18n="config">配置</span>
   </button>
 
   <div class="batch-actions" id="batchActions">
     <span class="badge" id="selectedCountBadge">已选 0 张</span>
-    <button class="btn btn-outline btn-sm" id="btnClearSelection" title="清空选择">清空选择</button>
-    <button class="btn btn-danger btn-sm" id="btnBatchDelete" title="批量删除已选发票">批量删除</button>
+    <button class="btn btn-outline btn-sm" id="btnClearSelection" title="清空选择" data-i18n-title="clearSelection">清空选择</button>
+    <button class="btn btn-danger btn-sm" id="btnBatchDelete" title="批量删除已选发票" data-i18n-title="batchDeleteSelected">批量删除</button>
   </div>
 
   <div class="header-spacer"></div>
@@ -103,20 +99,20 @@
 
   <!-- 左侧已上传发票列表 -->
   <aside class="upload-panel">
-    <div class="panel-title">已上传发票</div>
+    <div class="panel-title" data-i18n="uploadedInvoices">已上传发票</div>
 
     <div class="upload-zone" id="uploadZone">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
         <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
       </svg>
-      <div>点击或拖拽上传发票</div>
-      <p>支持 PDF、图片、OFD</p>
+      <div data-i18n="uploadHint">点击或拖拽上传发票</div>
+      <p data-i18n="uploadSupport">支持 PDF、图片、OFD</p>
       <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png,.bmp,.tiff,.ofd" style="display:none" />
     </div>
 
     <div class="invoice-list" id="invoiceList">
-      <div class="empty-state">暂无发票，请先上传</div>
+      <div class="empty-state" data-i18n="noInvoices">暂无发票，请先上传</div>
     </div>
   </aside>
 
@@ -348,6 +344,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="/static/js/app.js?v=20260402a"></script>
+<script src="/static/js/app.js?v=20260402e"></script>
 </body>
 </html>
