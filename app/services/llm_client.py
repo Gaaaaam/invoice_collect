@@ -1,8 +1,11 @@
-import os
 import json
+import logging
+import os
 import yaml
 from typing import Any, Optional
 from openai import AsyncOpenAI
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MODELS_CONFIG_PATH = os.path.join(BASE_DIR, "config", "models.yml")
@@ -25,14 +28,13 @@ class LLMClient:
             timeout=self.timeout,
         )
 
-    async def classify_invoice(
+    async def classify_invoice_with_raw(
         self,
         invoice_data: dict,
         categories: list[dict],
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], str]:
         """
-        根据发票结构化信息，调用 LLM 判断所属费用大类。
-        返回 category_id 或 None。
+        调用 LLM 判断费用大类。返回 (category_id 或 None, 模型原始文本片段)。
         """
         category_list = "\n".join(
             f"- {c['id']}：{c['name']}（{c.get('description', '')}）"
@@ -57,17 +59,39 @@ class LLMClient:
                 temperature=0,
                 max_tokens=50,
             )
-            result = response.choices[0].message.content.strip().lower()
+            raw = (response.choices[0].message.content or "").strip()
+            result = raw.lower()
+            logger.debug(
+                "LLM classify_invoice invoice_id=%s raw=%r",
+                invoice_data.get("id"),
+                raw[:200] if raw else raw,
+            )
             valid_ids = {c["id"] for c in categories}
             if result in valid_ids:
-                return result
+                return result, raw
             for cat_id in valid_ids:
                 if cat_id in result:
-                    return cat_id
-            return None
+                    return cat_id, raw
+            return None, raw
         except Exception as e:
-            print(f"[LLMClient] classify_invoice error: {e}")
-            return None
+            logger.warning(
+                "LLM classify_invoice error invoice_id=%s: %s",
+                invoice_data.get("id"),
+                e,
+            )
+            return None, ""
+
+    async def classify_invoice(
+        self,
+        invoice_data: dict,
+        categories: list[dict],
+    ) -> Optional[str]:
+        """
+        根据发票结构化信息，调用 LLM 判断所属费用大类。
+        返回 category_id 或 None。
+        """
+        cat, _ = await self.classify_invoice_with_raw(invoice_data, categories)
+        return cat
 
     async def classify_meeting_group(
         self,
@@ -110,11 +134,15 @@ class LLMClient:
                 temperature=0,
                 max_tokens=500,
             )
-            content = response.choices[0].message.content.strip()
+            content = (response.choices[0].message.content or "").strip()
+            logger.debug(
+                "LLM classify_meeting_group raw (truncated): %r",
+                content[:800] if content else content,
+            )
             data = json.loads(content)
             return data.get("groups", [[inv["id"]] for inv in invoices])
         except Exception as e:
-            print(f"[LLMClient] classify_meeting_group error: {e}")
+            logger.warning("LLM classify_meeting_group error: %s", e)
             return [[inv["id"]] for inv in invoices]
 
     async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:

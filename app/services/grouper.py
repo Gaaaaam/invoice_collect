@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date
 from typing import Optional
@@ -25,6 +26,8 @@ from dateutil import parser as dateutil_parser
 
 from app.services.llm_client import get_llm_client
 from app.services.station_city_map import normalize_transport_city
+
+logger = logging.getLogger(__name__)
 
 
 # ─── 城市名标准化（接入映射表）────────────────────────────────────────────────
@@ -135,6 +138,13 @@ def detect_travel_loops(travel_invoices: list[dict]) -> list[TravelLoop]:
     """
     transport = [inv for inv in travel_invoices if inv.get("is_transport")]
     non_transport = [inv for inv in travel_invoices if not inv.get("is_transport")]
+
+    logger.info(
+        "travel_loops input total=%s transport=%s non_transport=%s",
+        len(travel_invoices),
+        len(transport),
+        len(non_transport),
+    )
 
     if not transport:
         if travel_invoices:
@@ -251,6 +261,21 @@ def detect_travel_loops(travel_invoices: list[dict]) -> list[TravelLoop]:
         misc.all_invoice_ids = [inv["id"] for inv in remaining]
         loops.append(misc)
 
+    closed_n = sum(1 for lp in loops if lp.is_closed)
+    logger.info(
+        "travel_loops result groups=%s closed_loops=%s",
+        len(loops),
+        closed_n,
+    )
+    for i, lp in enumerate(loops):
+        logger.debug(
+            "travel_loop[%s] closed=%s cities_path=%s invoice_ids=%s",
+            i,
+            lp.is_closed,
+            lp.cities_path,
+            lp.all_invoice_ids,
+        )
+
     return loops
 
 
@@ -326,6 +351,11 @@ async def group_meeting_invoices(meeting_invoices: list[dict]) -> list[list[int]
         return []
 
     heuristic_groups = group_meeting_invoices_heuristic(meeting_invoices)
+    logger.info(
+        "meeting_groups heuristic invoice_count=%s group_count=%s",
+        len(meeting_invoices),
+        len(heuristic_groups),
+    )
 
     if len(meeting_invoices) > 1:
         try:
@@ -335,9 +365,18 @@ async def group_meeting_invoices(meeting_invoices: list[dict]) -> list[list[int]
                 original_ids = {inv["id"] for inv in meeting_invoices}
                 llm_ids = {inv_id for group in llm_groups for inv_id in group}
                 if original_ids == llm_ids:
+                    logger.info(
+                        "meeting_groups using_llm group_count=%s",
+                        len(llm_groups),
+                    )
                     return llm_groups
-        except Exception as e:
-            print(f"[grouper] LLM meeting group failed, use heuristic: {e}")
+                logger.info(
+                    "meeting_groups llm_id_mismatch fallback_heuristic original_ids=%s llm_ids=%s",
+                    sorted(original_ids),
+                    sorted(llm_ids),
+                )
+        except Exception:
+            logger.exception("meeting_groups LLM failed, using heuristic")
 
     return heuristic_groups
 

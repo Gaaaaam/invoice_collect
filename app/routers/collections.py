@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import traceback
 from datetime import datetime
 from typing import Optional
@@ -37,6 +38,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 CATEGORIES_CONFIG_PATH = os.path.join(BASE_DIR, "config", "categories.yml")
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
+logger = logging.getLogger(__name__)
 
 
 def _load_categories() -> list[dict]:
@@ -55,6 +57,9 @@ def _load_categories() -> list[dict]:
 
 
 def _invoice_to_dict(inv: Invoice) -> dict:
+    extracted = inv.extracted_data if isinstance(inv.extracted_data, dict) else {}
+    type_detected = extracted.get("invoice_type_detected")
+    train_number = extracted.get("train_number")
     return {
         "id": inv.id,
         "invoice_type": inv.invoice_type,
@@ -66,6 +71,9 @@ def _invoice_to_dict(inv: Invoice) -> dict:
         "tax_amount": inv.tax_amount,
         "total_amount": inv.total_amount,
         "items_description": inv.items_description,
+        "invoice_subcategory": inv.invoice_subcategory,
+        "invoice_type_detected": type_detected,
+        "train_number": train_number,
         "departure_city": inv.departure_city,
         "arrival_city": inv.arrival_city,
         "departure_time": inv.departure_time,
@@ -146,6 +154,16 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             total_inv = len(invoices)
             await emit(0, 5, 8, "准备中", f"共找到 {total_inv} 张可处理发票")
 
+            logger.info(
+                "collection task_id=%s invoices=%s force_reclassify=%s use_subcategory=%s use_rules=%s use_llm=%s",
+                task_id,
+                total_inv,
+                request.force_reclassify,
+                request.use_subcategory,
+                request.use_rules,
+                request.use_llm,
+            )
+
             categories = _load_categories()
             category_map = {c["id"]: c for c in categories}
 
@@ -211,6 +229,7 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
 
             summary = f"分类完成：规则匹配 {rule_count} 张，AI判别 {llm_count} 张，跳过 {skip_count} 张"
             await emit(1, 5, 65, "发票分类", summary)
+            logger.info("collection task_id=%s classify_summary %s", task_id, summary)
 
             # ── Step 2: 差旅闭环分组 ──────────────────────────────────────────
             travel_invoices = category_buckets.get("travel", [])
@@ -231,6 +250,12 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 closed = sum(1 for l in loops if l.is_closed)
                 await emit(2, 5, 72, "差旅闭环分组",
                            f"检测到 {len(loops)} 个行程组（其中 {closed} 个完整闭环）")
+                logger.info(
+                    "collection task_id=%s travel_groups=%s closed_loops=%s",
+                    task_id,
+                    len(loops),
+                    closed,
+                )
 
                 for idx, loop in enumerate(loops):
                     group = CollectionGroup(
@@ -296,6 +321,11 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
 
                 await emit(3, 5, 88, "会议分组",
                            f"识别出 {len(meeting_groups)} 个会议分组")
+                logger.info(
+                    "collection task_id=%s meeting_groups=%s",
+                    task_id,
+                    len(meeting_groups),
+                )
             else:
                 await emit(3, 5, 88, "会议分组", "无会议费发票，跳过")
 
@@ -309,10 +339,15 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                        "归集完成",
                        f"成功处理 {total_inv} 张发票，结果已更新",
                        status="done")
+            logger.info(
+                "collection task_id=%s done processed_invoices=%s",
+                task_id,
+                total_inv,
+            )
 
         except Exception as exc:
             tb = traceback.format_exc()
-            print(f"[collection] task {task_id} error:\n{tb}")
+            logger.exception("collection task_id=%s failed: %s", task_id, exc)
             await progress_manager.emit(task_id, ProgressEvent(
                 step=0, total=5, percent=0,
                 title="归集出错",
