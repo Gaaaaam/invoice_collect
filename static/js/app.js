@@ -457,6 +457,7 @@ function renderBoard() {
   if (!result) { board.innerHTML = ''; return; }
 
   const cols = [];
+  const displayCategories = buildDisplayCategories(result);
 
   // 未分类列（如有）
   if (result.unclassified_invoices?.length) {
@@ -464,9 +465,7 @@ function renderBoard() {
   }
 
   // 各大类列
-  result.categories.forEach(cat => {
-    const totalInv = (cat.groups?.flatMap(g => g.invoices) || []).concat(cat.ungrouped_invoices || []);
-    if (!totalInv.length) return;
+  displayCategories.forEach(cat => {
     cols.push(renderCategoryCol(cat));
   });
 
@@ -476,6 +475,7 @@ function renderBoard() {
   }
 
   board.innerHTML = cols.join('');
+  refreshBoardColumnSummaries();
 
   // 初始化拖拽
   initDragDrop();
@@ -483,31 +483,54 @@ function renderBoard() {
   refreshSelectionUI();
 }
 
+function buildDisplayCategories(result) {
+  const existing = new Map((result.categories || []).map(cat => [cat.category_id, cat]));
+  const categories = (state.categories || []).map(cfg => {
+    const matched = existing.get(cfg.id);
+    if (matched) return matched;
+    return {
+      category_id: cfg.id,
+      category_name: cfg.name,
+      groupable: !!cfg.groupable,
+      groups: [],
+      ungrouped_invoices: [],
+      total_amount: 0,
+    };
+  });
+
+  // 兼容后端返回了前端配置中不存在的大类
+  (result.categories || []).forEach(cat => {
+    if (!categories.some(item => item.category_id === cat.category_id)) {
+      categories.push(cat);
+    }
+  });
+  return categories;
+}
+
 function renderCategoryCol(cat) {
   const colorClass = CAT_COLORS[cat.category_id] || 'other';
   const icon = CAT_ICONS[cat.category_id] || '🗂️';
-  const totalAmt = cat.total_amount ? `¥${cat.total_amount.toFixed(2)}` : '';
+  const totalAmt = `¥${Number(cat.total_amount || 0).toFixed(2)}`;
 
   let bodyHtml = '';
 
   if (cat.groupable) {
     // 有分组的大类（差旅/会议）
     bodyHtml += cat.groups.map((g, gi) => renderGroupCard(g, cat)).join('');
-    // 无组散票
-    if (cat.ungrouped_invoices?.length) {
-      bodyHtml += `
-        <div class="group-card">
-          <div class="group-header" onclick="toggleGroup(this)">
-            <span class="group-icon">📄</span>
-            <span class="group-name">未分组</span>
-            <span class="group-count">${cat.ungrouped_invoices.length} 张</span>
-            <span class="group-toggle">▼</span>
-          </div>
-          <div class="group-body drop-zone" data-category="${cat.category_id}" data-group="">
-            ${cat.ungrouped_invoices.map(inv => renderInvCard(inv, cat.category_id, null)).join('')}
-          </div>
-        </div>`;
-    }
+    // 无组散票容器始终保留，便于空列时也可拖拽进入
+    bodyHtml += `
+      <div class="group-card">
+        <div class="group-header" onclick="toggleGroup(this)">
+          <span class="group-icon">📄</span>
+          <span class="group-name">未分组</span>
+          <span class="group-count">${cat.ungrouped_invoices?.length || 0} 张</span>
+          <span class="group-toggle">▼</span>
+        </div>
+        <div class="group-body drop-zone" data-category="${cat.category_id}" data-group="">
+          ${cat.ungrouped_invoices?.map(inv => renderInvCard(inv, cat.category_id, null)).join('') || ''}
+          ${!cat.ungrouped_invoices?.length ? '<div class="empty-state">拖拽发票到此处</div>' : ''}
+        </div>
+      </div>`;
     // 新建分组按钮
     bodyHtml += `<button class="add-rule-btn" onclick="openCreateGroup('${cat.category_id}')">＋ 新建分组</button>`;
   } else {
@@ -669,6 +692,7 @@ function initDragDrop() {
           el.dataset.category = targetCategory;
           el.dataset.group = targetGroup || '';
         });
+        refreshBoardColumnSummaries();
 
         if (movedIds.length === 1) {
           moveInvoice(movedIds[0], targetCategory, targetGroup);
@@ -682,6 +706,37 @@ function initDragDrop() {
   });
 }
 
+function parseAmountText(text) {
+  const normalized = String(text || '').replace(/[^\d.-]/g, '');
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function ensureDropZoneEmptyState(zone) {
+  if (!zone) return;
+  const hasCards = zone.querySelector('.inv-card');
+  const empty = zone.querySelector('.empty-state');
+  if (hasCards && empty) {
+    empty.remove();
+  } else if (!hasCards && !empty) {
+    zone.insertAdjacentHTML('beforeend', '<div class="empty-state">拖拽发票到此处</div>');
+  }
+}
+
+function refreshBoardColumnSummaries() {
+  document.querySelectorAll('.drop-zone').forEach(ensureDropZoneEmptyState);
+
+  document.querySelectorAll('.board-col[id^="col-"]').forEach(col => {
+    if (col.id === 'col-unclassified') return;
+    const total = Array.from(col.querySelectorAll('.inv-amount'))
+      .reduce((sum, amountEl) => sum + parseAmountText(amountEl.textContent), 0);
+    const amountEl = col.querySelector('.col-amount');
+    if (amountEl) {
+      amountEl.textContent = `¥${total.toFixed(2)}`;
+    }
+  });
+}
+
 async function moveInvoice(invoiceId, categoryId, groupId) {
   try {
     await api('PATCH', '/api/collections/move', {
@@ -690,8 +745,7 @@ async function moveInvoice(invoiceId, categoryId, groupId) {
       target_group_id: groupId,
     });
     toast('已更新发票归属', 'success');
-    // 静默刷新数据（不重绘，避免布局跳动）
-    state.collectionResult = await api('GET', '/api/collections/result');
+    await loadCollectionResult();
   } catch (e) {
     toast(`移动失败：${e}`, 'error');
     // 回滚：重新渲染
@@ -707,7 +761,6 @@ async function moveInvoicesBatch(invoiceIds, categoryId, groupId) {
       target_group_id: groupId,
     });
     toast(`已批量更新 ${invoiceIds.length} 张发票归属`, 'success');
-    state.collectionResult = await api('GET', '/api/collections/result');
     await loadCollectionResult();
   } catch (e) {
     toast(`批量移动失败：${e}`, 'error');

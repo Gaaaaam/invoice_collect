@@ -2,6 +2,7 @@ import os
 import shutil
 import uuid
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -160,6 +161,21 @@ _MEDIA_TYPES: dict[str, str] = {
 }
 
 
+def _build_inline_content_disposition(filename: str, fallback_ext: str = "") -> str:
+    """构造兼容中文文件名的 Content-Disposition（inline）头。"""
+    safe_name = os.path.basename(filename or "").strip()
+    if not safe_name:
+        safe_name = f"invoice{fallback_ext}"
+
+    ascii_fallback = safe_name.encode("ascii", "ignore").decode("ascii").strip()
+    if not ascii_fallback:
+        ascii_fallback = f"invoice{fallback_ext}"
+    ascii_fallback = ascii_fallback.replace('"', "")
+
+    utf8_name = quote(safe_name, safe="")
+    return f'inline; filename="{ascii_fallback}"; filename*=UTF-8\'\'{utf8_name}'
+
+
 @router.get("/{invoice_id}/file")
 async def get_invoice_file(invoice_id: int, db: AsyncSession = Depends(get_db)):
     """返回发票原始文件，用于前端预览。"""
@@ -171,12 +187,12 @@ async def get_invoice_file(invoice_id: int, db: AsyncSession = Depends(get_db)):
 
     ext = os.path.splitext(invoice.file_path)[1].lower()
     media_type = _MEDIA_TYPES.get(ext, "application/octet-stream")
+    content_disposition = _build_inline_content_disposition(invoice.filename or "", ext)
 
     return FileResponse(
         invoice.file_path,
         media_type=media_type,
-        filename=invoice.filename,
-        headers={"Content-Disposition": f'inline; filename="{invoice.filename}"'},
+        headers={"Content-Disposition": content_disposition},
     )
 
 
