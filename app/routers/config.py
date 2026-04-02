@@ -29,21 +29,36 @@ def _write_yaml(filename: str, data: dict) -> None:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
+def _normalize_category_config(cat: dict) -> dict:
+    """归一化费用大类配置：除 other 外默认支持分组。"""
+    category = dict(cat or {})
+    cid = str(category.get("id") or "").strip()
+    category["id"] = cid
+
+    if cid == "other":
+        category["groupable"] = False
+    else:
+        category["groupable"] = bool(category.get("groupable", True))
+    return category
+
+
 # ─── 费用大类配置 ──────────────────────────────────────────────────────────────
 
 @router.get("/categories", response_model=CategoriesConfig)
 async def get_categories():
     """读取费用大类配置"""
     data = _read_yaml("categories.yml")
+    normalized = [_normalize_category_config(c) for c in data.get("categories", [])]
     return CategoriesConfig(
-        categories=[CategoryConfig(**c) for c in data.get("categories", [])]
+        categories=[CategoryConfig(**c) for c in normalized]
     )
 
 
 @router.put("/categories", response_model=MessageResponse)
 async def update_categories(config: CategoriesConfig):
     """更新费用大类配置"""
-    data = {"categories": [c.model_dump() for c in config.categories]}
+    normalized = [_normalize_category_config(c.model_dump()) for c in config.categories]
+    data = {"categories": normalized}
     _write_yaml("categories.yml", data)
     return MessageResponse(message="费用大类配置已保存")
 

@@ -42,7 +42,16 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 def _load_categories() -> list[dict]:
     with open(CATEGORIES_CONFIG_PATH, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    return data.get("categories", [])
+    categories = data.get("categories", [])
+    normalized: list[dict] = []
+    for cat in categories:
+        item = dict(cat or {})
+        cid = str(item.get("id") or "").strip()
+        item["id"] = cid
+        # 业务约束：除“其他费用”外默认支持分组
+        item["groupable"] = False if cid == "other" else bool(item.get("groupable", True))
+        normalized.append(item)
+    return normalized
 
 
 def _invoice_to_dict(inv: Invoice) -> dict:
