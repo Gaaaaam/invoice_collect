@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import CollectionItem, Invoice
-from app.schemas import InvoiceResponse, MessageResponse
+from app.schemas import BatchDeleteInvoicesRequest, InvoiceResponse, MessageResponse
 from app.services.extractor import get_extractor
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -109,6 +109,35 @@ async def list_invoices(
         stmt = stmt.where(Invoice.extract_status == extract_status)
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.post("/batch-delete", response_model=MessageResponse)
+async def batch_delete_invoices(
+    request: BatchDeleteInvoicesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除发票及其归集记录"""
+    if not request.invoice_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一张发票")
+
+    result = await db.execute(select(Invoice).where(Invoice.id.in_(request.invoice_ids)))
+    invoices = list(result.scalars().all())
+    if not invoices:
+        raise HTTPException(status_code=404, detail="未找到可删除的发票")
+
+    deleted = 0
+    for invoice in invoices:
+        await db.execute(delete(CollectionItem).where(CollectionItem.invoice_id == invoice.id))
+        if os.path.exists(invoice.file_path):
+            try:
+                os.remove(invoice.file_path)
+            except OSError:
+                pass
+        await db.delete(invoice)
+        deleted += 1
+
+    await db.commit()
+    return MessageResponse(message=f"已删除 {deleted} 张发票")
 
 
 @router.get("/{invoice_id}", response_model=InvoiceResponse)

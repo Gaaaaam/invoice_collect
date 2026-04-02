@@ -10,7 +10,11 @@ const state = {
   rules: [],             // 分类规则
   modelsConfig: null,    // 模型服务配置
   sortableInstances: [], // SortableJS 实例引用（便于销毁重建）
+  selectedInvoiceIds: new Set(), // 看板中多选的发票
+  selectionAnchorId: null, // Shift 多选锚点
 };
+
+let _dragContext = null; // 记录拖拽开始时的选择上下文
 
 // 大类图标映射
 const CAT_ICONS = {
@@ -167,6 +171,88 @@ function updateTotalBadge() {
   document.getElementById('totalBadge').textContent = `共 ${state.invoices.length} 张发票`;
 }
 
+function getVisibleInvCardIds() {
+  return Array.from(document.querySelectorAll('.inv-card')).map(el => parseInt(el.dataset.id)).filter(Number.isFinite);
+}
+
+function clearSelection() {
+  state.selectedInvoiceIds.clear();
+  state.selectionAnchorId = null;
+  refreshSelectionUI();
+}
+
+function refreshSelectionUI() {
+  const validIds = new Set(getVisibleInvCardIds());
+  for (const id of Array.from(state.selectedInvoiceIds)) {
+    if (!validIds.has(id)) state.selectedInvoiceIds.delete(id);
+  }
+  if (state.selectionAnchorId != null && !validIds.has(state.selectionAnchorId)) {
+    state.selectionAnchorId = null;
+  }
+
+  document.querySelectorAll('.inv-card').forEach(card => {
+    const id = parseInt(card.dataset.id);
+    const selected = state.selectedInvoiceIds.has(id);
+    card.classList.toggle('selected', selected);
+    const btn = card.querySelector('.inv-select-btn');
+    if (btn) {
+      btn.classList.toggle('active', selected);
+      btn.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    }
+  });
+
+  const selectedCount = state.selectedInvoiceIds.size;
+  const badge = document.getElementById('selectedCountBadge');
+  const clearBtn = document.getElementById('btnClearSelection');
+  const delBtn = document.getElementById('btnBatchDelete');
+  badge.textContent = `已选 ${selectedCount} 张`;
+  clearBtn.disabled = selectedCount === 0;
+  delBtn.disabled = selectedCount === 0;
+}
+
+function handleInvCardClick(event, invoiceId) {
+  const orderedIds = getVisibleInvCardIds();
+  if (!orderedIds.length) return;
+
+  if (event.shiftKey && state.selectionAnchorId != null && orderedIds.includes(state.selectionAnchorId)) {
+    const a = orderedIds.indexOf(state.selectionAnchorId);
+    const b = orderedIds.indexOf(invoiceId);
+    const [start, end] = a < b ? [a, b] : [b, a];
+    state.selectedInvoiceIds = new Set(orderedIds.slice(start, end + 1));
+  } else if (event.ctrlKey || event.metaKey) {
+    if (state.selectedInvoiceIds.has(invoiceId)) state.selectedInvoiceIds.delete(invoiceId);
+    else state.selectedInvoiceIds.add(invoiceId);
+    state.selectionAnchorId = invoiceId;
+  } else {
+    state.selectedInvoiceIds = new Set([invoiceId]);
+    state.selectionAnchorId = invoiceId;
+  }
+  refreshSelectionUI();
+}
+
+function toggleInvSelect(event, invoiceId) {
+  event.stopPropagation();
+  if (state.selectedInvoiceIds.has(invoiceId)) state.selectedInvoiceIds.delete(invoiceId);
+  else state.selectedInvoiceIds.add(invoiceId);
+  state.selectionAnchorId = invoiceId;
+  refreshSelectionUI();
+}
+
+async function batchDeleteSelectedInvoices() {
+  const ids = Array.from(state.selectedInvoiceIds);
+  if (!ids.length) return;
+  if (!confirm(`确认删除选中的 ${ids.length} 张发票？此操作不可撤销。`)) return;
+
+  try {
+    await api('POST', '/api/invoices/batch-delete', { invoice_ids: ids });
+    toast(`已删除 ${ids.length} 张发票`, 'success');
+    clearSelection();
+    await Promise.all([loadInvoices(), loadCollectionResult()]);
+  } catch (e) {
+    toast(`批量删除失败：${e}`, 'error');
+  }
+}
+
 // ─── Process (归集) + SSE Progress Modal ─────────────────────────────────────
 
 let _progressES = null; // 当前 EventSource 引用
@@ -184,7 +270,17 @@ document.addEventListener('click', (e) => {
       !document.getElementById('processBtnGroup').contains(e.target)) {
     panel.classList.add('hidden');
   }
+
+  // 点击非发票卡片区域时，清空多选
+  const invCard = e.target.closest('.inv-card');
+  const batchPanel = e.target.closest('#batchActions');
+  if (!invCard && !batchPanel && state.selectedInvoiceIds.size) {
+    clearSelection();
+  }
 });
+
+document.getElementById('btnClearSelection').addEventListener('click', clearSelection);
+document.getElementById('btnBatchDelete').addEventListener('click', batchDeleteSelectedInvoices);
 
 document.getElementById('btnProcess').addEventListener('click', async () => {
   if (!state.invoices.length) { toast('请先上传发票', 'warning'); return; }
@@ -383,6 +479,8 @@ function renderBoard() {
 
   // 初始化拖拽
   initDragDrop();
+  // 重绘后同步多选样式
+  refreshSelectionUI();
 }
 
 function renderCategoryCol(cat) {
@@ -470,12 +568,17 @@ function renderInvCard(inv, categoryId, groupId) {
   const [tagClass, tagLabel] = CLASSIFIED_BY_LABELS[inv.classified_by] || CLASSIFIED_BY_LABELS.default;
   const amt = inv.total_amount != null ? `¥${Number(inv.total_amount).toFixed(2)}` : '';
   const date = (inv.issue_date || '').slice(0, 10);
+  const selectedClass = state.selectedInvoiceIds.has(inv.id) ? 'selected' : '';
   return `
-    <div class="inv-card"
+    <div class="inv-card ${selectedClass}"
          data-id="${inv.id}"
          data-category="${categoryId}"
          data-group="${groupId || ''}"
+         onclick="handleInvCardClick(event, ${inv.id})"
          ondblclick="showInvDetail(${inv.id})">
+      <button class="inv-select-btn ${state.selectedInvoiceIds.has(inv.id) ? 'active' : ''}"
+              onclick="toggleInvSelect(event, ${inv.id})"
+              title="选择/取消选择">✓</button>
       <div class="inv-icon">${invoiceIcon(inv.invoice_type)}</div>
       <div class="inv-body">
         <div class="inv-type">${escHtml(inv.invoice_type || inv.filename || '未知类型')}</div>
@@ -503,23 +606,76 @@ function initDragDrop() {
       ghostClass: 'sortable-ghost',
       dragClass: 'sortable-drag',
       handle: '.inv-card',
+      onStart(evt) {
+        const draggedId = parseInt(evt.item.dataset.id);
+        const selectedIds = Array.from(state.selectedInvoiceIds);
+        const useBatch = selectedIds.length > 1 && selectedIds.includes(draggedId);
+
+        const origins = {};
+        const ids = useBatch ? selectedIds : [draggedId];
+        ids.forEach(id => {
+          const el = document.querySelector(`.inv-card[data-id="${id}"]`);
+          origins[id] = {
+            category: el?.dataset.category || '',
+            group: el?.dataset.group || '',
+          };
+        });
+        _dragContext = { draggedId, ids, useBatch, origins };
+      },
       onEnd(evt) {
         const card = evt.item;
-        const invoiceId = parseInt(card.dataset.id);
         const targetZone = evt.to;
         const targetCategory = targetZone.dataset.category;
         const targetGroup = targetZone.dataset.group ? parseInt(targetZone.dataset.group) : null;
+        const context = _dragContext || {
+          draggedId: parseInt(card.dataset.id),
+          ids: [parseInt(card.dataset.id)],
+          useBatch: false,
+          origins: {
+            [parseInt(card.dataset.id)]: {
+              category: card.dataset.category || '',
+              group: card.dataset.group || '',
+            },
+          },
+        };
 
-        const origCategory = card.dataset.category;
-        const origGroup = card.dataset.group ? parseInt(card.dataset.group) : null;
+        // 批量拖拽时，把其他选中卡片也移动到目标容器
+        if (context.useBatch) {
+          context.ids
+            .filter(id => id !== context.draggedId)
+            .forEach(id => {
+              const el = document.querySelector(`.inv-card[data-id="${id}"]`);
+              if (!el) return;
+              targetZone.appendChild(el);
+            });
+        }
 
-        if (targetCategory === origCategory && targetGroup === origGroup) return;
+        const movedIds = context.ids.filter(id => {
+          const origin = context.origins[id] || { category: '', group: '' };
+          const sameCategory = origin.category === targetCategory;
+          const sameGroup = (origin.group || '') === (targetZone.dataset.group || '');
+          return !(sameCategory && sameGroup);
+        });
+
+        if (!movedIds.length) {
+          _dragContext = null;
+          return;
+        }
 
         // 乐观更新 DOM 属性
-        card.dataset.category = targetCategory;
-        card.dataset.group = targetGroup || '';
+        movedIds.forEach(id => {
+          const el = document.querySelector(`.inv-card[data-id="${id}"]`);
+          if (!el) return;
+          el.dataset.category = targetCategory;
+          el.dataset.group = targetGroup || '';
+        });
 
-        moveInvoice(invoiceId, targetCategory, targetGroup);
+        if (movedIds.length === 1) {
+          moveInvoice(movedIds[0], targetCategory, targetGroup);
+        } else {
+          moveInvoicesBatch(movedIds, targetCategory, targetGroup);
+        }
+        _dragContext = null;
       },
     });
     state.sortableInstances.push(sortable);
@@ -539,6 +695,22 @@ async function moveInvoice(invoiceId, categoryId, groupId) {
   } catch (e) {
     toast(`移动失败：${e}`, 'error');
     // 回滚：重新渲染
+    await loadCollectionResult();
+  }
+}
+
+async function moveInvoicesBatch(invoiceIds, categoryId, groupId) {
+  try {
+    await api('PATCH', '/api/collections/move/batch', {
+      invoice_ids: invoiceIds,
+      target_category_id: categoryId,
+      target_group_id: groupId,
+    });
+    toast(`已批量更新 ${invoiceIds.length} 张发票归属`, 'success');
+    state.collectionResult = await api('GET', '/api/collections/result');
+    await loadCollectionResult();
+  } catch (e) {
+    toast(`批量移动失败：${e}`, 'error');
     await loadCollectionResult();
   }
 }
@@ -674,6 +846,8 @@ async function deleteInvoice(invoiceId) {
   if (!confirm('确认删除该发票？此操作不可撤销。')) return;
   try {
     await api('DELETE', `/api/invoices/${invoiceId}`);
+    state.selectedInvoiceIds.delete(invoiceId);
+    if (state.selectionAnchorId === invoiceId) state.selectionAnchorId = null;
     toast('已删除', 'success');
     await loadInvoices();
     await loadCollectionResult();

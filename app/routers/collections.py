@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, AsyncSessionLocal
 from app.models import CollectionGroup, CollectionItem, Invoice
 from app.schemas import (
+    BatchMoveInvoicesRequest,
     CategoryResult,
     CollectionGroupResponse,
     CollectionResult,
@@ -451,6 +452,68 @@ async def move_invoice(
 
     await db.commit()
     return MessageResponse(message="发票归属已更新")
+
+
+@router.patch("/move/batch", response_model=MessageResponse)
+async def move_invoices_batch(
+    request: BatchMoveInvoicesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量拖拽：将多张发票移动到指定大类和分组"""
+    if not request.invoice_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一张发票")
+
+    categories = _load_categories()
+    valid_cat_ids = {c["id"] for c in categories}
+    if request.target_category_id not in valid_cat_ids:
+        raise HTTPException(status_code=400, detail="无效的费用大类")
+
+    # 验证目标分组存在（如有）
+    if request.target_group_id is not None:
+        grp = await db.get(CollectionGroup, request.target_group_id)
+        if not grp:
+            raise HTTPException(status_code=404, detail="目标分组不存在")
+        if grp.category_id != request.target_category_id:
+            raise HTTPException(status_code=400, detail="目标分组与大类不匹配")
+
+    # 仅处理真实存在的发票 ID
+    inv_result = await db.execute(
+        select(Invoice.id).where(Invoice.id.in_(request.invoice_ids))
+    )
+    existing_ids = {row[0] for row in inv_result.fetchall()}
+    if not existing_ids:
+        raise HTTPException(status_code=404, detail="未找到可移动的发票")
+
+    item_result = await db.execute(
+        select(CollectionItem).where(CollectionItem.invoice_id.in_(existing_ids))
+    )
+    item_map = {item.invoice_id: item for item in item_result.scalars().all()}
+
+    moved = 0
+    for invoice_id in existing_ids:
+        item = item_map.get(invoice_id)
+        if item:
+            item.category_id = request.target_category_id
+            item.group_id = request.target_group_id
+            item.classified_by = "manual"
+            item.classified_at = datetime.utcnow()
+            if request.note:
+                item.note = request.note
+        else:
+            db.add(
+                CollectionItem(
+                    invoice_id=invoice_id,
+                    category_id=request.target_category_id,
+                    group_id=request.target_group_id,
+                    classified_by="manual",
+                    classified_at=datetime.utcnow(),
+                    note=request.note,
+                )
+            )
+        moved += 1
+
+    await db.commit()
+    return MessageResponse(message=f"已批量更新 {moved} 张发票归属")
 
 
 @router.post("/groups", response_model=CollectionGroupResponse)

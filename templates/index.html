@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>发票归集系统</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/style.css?v=20260401b" />
 </head>
 <body>
 
@@ -86,6 +86,12 @@
     </svg>
     配置
   </button>
+
+  <div class="batch-actions" id="batchActions">
+    <span class="badge" id="selectedCountBadge">已选 0 张</span>
+    <button class="btn btn-outline btn-sm" id="btnClearSelection" title="清空选择">清空选择</button>
+    <button class="btn btn-danger btn-sm" id="btnBatchDelete" title="批量删除已选发票">批量删除</button>
+  </div>
 
   <div class="header-spacer"></div>
 
@@ -342,6 +348,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/app.js?v=20260401b"></script>
 </body>
 </html>

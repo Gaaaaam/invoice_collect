@@ -71,6 +71,13 @@ class MoveInvoiceRequest(BaseModel):
     note: Optional[str] = None
 
 
+class BatchMoveInvoicesRequest(BaseModel):
+    invoice_ids: list[int]
+    target_category_id: str
+    target_group_id: Optional[int] = None
+    note: Optional[str] = None
+
+
 # ─── 归集结果全量响应 ──────────────────────────────────────────────────────────
 
 class CategoryResult(BaseModel):
@@ -164,3 +171,7 @@ class CreateGroupRequest(BaseModel):
 class UpdateGroupRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+
+class BatchDeleteInvoicesRequest(BaseModel):
+    invoice_ids: list[int]
