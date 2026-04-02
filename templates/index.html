@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="appTitle">发票归集系统</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260402e" />
+  <link rel="stylesheet" href="/static/css/style.css?v=20260402g" />
 </head>
 <body>
 
@@ -122,10 +122,26 @@
   </main>
 </div>
 
-<!-- ─── Upload Loading Overlay（上传时用轻量遮罩）────────────────────────── -->
+<!-- ─── Upload Loading Overlay（上传 / 抽取：节点式进度，与归集弹窗风格一致）──── -->
 <div class="loading-overlay hidden" id="loadingOverlay">
-  <div class="spinner spinner-dark"></div>
-  <span id="loadingText">处理中...</span>
+  <div class="upload-progress-panel">
+    <div class="upload-progress-title" id="uploadProgressTitle">处理中…</div>
+    <div class="progress-steps upload-progress-steps" id="uploadProgressSteps">
+      <div class="progress-step" data-upload-step="0">
+        <div class="step-dot"></div>
+        <div class="step-label" data-i18n="uploadStepSend">上传文件</div>
+      </div>
+      <div class="progress-step" data-upload-step="1">
+        <div class="step-dot"></div>
+        <div class="step-label" data-i18n="uploadStepExtract">识别与抽取</div>
+      </div>
+      <div class="progress-step" data-upload-step="2">
+        <div class="step-dot"></div>
+        <div class="step-label" data-i18n="uploadStepFinish">完成</div>
+      </div>
+    </div>
+    <div class="upload-progress-detail" id="loadingDetailText"></div>
+  </div>
 </div>
 
 <!-- ─── Progress Modal（归集进度弹窗）────────────────────────────────────── -->
@@ -153,27 +169,23 @@
       <div class="progress-steps" id="progressSteps">
         <div class="progress-step" data-step="0">
           <div class="step-dot"></div>
-          <div class="step-label">准备中</div>
+          <div class="step-label" data-i18n="progressStepPrepare">准备中</div>
         </div>
         <div class="progress-step" data-step="1">
           <div class="step-dot"></div>
-          <div class="step-label">发票分类</div>
+          <div class="step-label" data-i18n="progressStepClassify">发票分类</div>
         </div>
         <div class="progress-step" data-step="2">
           <div class="step-dot"></div>
-          <div class="step-label">差旅闭环分组</div>
+          <div class="step-label" data-i18n="progressStepGroup">分组</div>
         </div>
         <div class="progress-step" data-step="3">
           <div class="step-dot"></div>
-          <div class="step-label">会议分组</div>
+          <div class="step-label" data-i18n="progressStepSave">保存结果</div>
         </div>
         <div class="progress-step" data-step="4">
           <div class="step-dot"></div>
-          <div class="step-label">保存结果</div>
-        </div>
-        <div class="progress-step" data-step="5">
-          <div class="step-dot"></div>
-          <div class="step-label">归集完成</div>
+          <div class="step-label" data-i18n="progressStepDone">归集完成</div>
         </div>
       </div>
 

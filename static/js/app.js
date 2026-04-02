@@ -43,6 +43,12 @@ const I18N = {
     forceReclassify: '强制重新分类', forceReclassifyHint: '对已分类的发票也重新执行',
     statusDone: '已抽取', statusPending: '待抽取', statusError: '抽取失败',
     loadingProcessing: '处理中...', loadingUploadExtract: '上传并抽取发票信息...',
+    uploadProgressTitle: '正在上传并处理发票…', uploadSendingHint: '正在上传 {count} 个文件…',
+    uploadExtractHint: '正在识别票面并抽取字段，请稍候…', uploadDoneTitle: '处理完成',
+    uploadStepSend: '上传文件', uploadStepExtract: '识别与抽取', uploadStepFinish: '完成',
+    progressStepPrepare: '准备中', progressStepClassify: '发票分类', progressStepGroup: '分组',
+    progressStepSave: '保存结果', progressStepDone: '归集完成',
+    categoryGrouping: '分组',
     uploadSuccess: '成功上传 {count} 张发票', uploadFailed: '上传失败：{error}',
     emptyBoard: '点击「开始归集」按钮对发票进行自动归集分类',
     ungrouped: '未分组', addGroup: '＋ 新建分组', dropHere: '拖拽发票到此处',
@@ -67,6 +73,12 @@ const I18N = {
     forceReclassify: 'Force Reclassify', forceReclassifyHint: 'Reclassify already-classified invoices',
     statusDone: 'Extracted', statusPending: 'Pending', statusError: 'Failed',
     loadingProcessing: 'Processing...', loadingUploadExtract: 'Uploading and extracting invoice data...',
+    uploadProgressTitle: 'Uploading and processing…', uploadSendingHint: 'Uploading {count} file(s)…',
+    uploadExtractHint: 'Extracting fields on server, please wait…', uploadDoneTitle: 'Done',
+    uploadStepSend: 'Upload', uploadStepExtract: 'Extract', uploadStepFinish: 'Done',
+    progressStepPrepare: 'Preparing', progressStepClassify: 'Classification', progressStepGroup: 'Grouping',
+    progressStepSave: 'Saving', progressStepDone: 'Complete',
+    categoryGrouping: 'Groups',
     uploadSuccess: 'Uploaded {count} invoice(s)', uploadFailed: 'Upload failed: {error}',
     emptyBoard: 'Click "Start Collection" to classify invoices',
     ungrouped: 'Ungrouped', addGroup: '+ New Group', dropHere: 'Drag invoices here',
@@ -140,13 +152,85 @@ function toast(msg, type = '') {
   setTimeout(() => el.remove(), 3500);
 }
 
-// ─── Loading ──────────────────────────────────────────────────────────────────
-function showLoading(text = t('loadingProcessing')) {
-  document.getElementById('loadingText').textContent = text;
+// ─── Upload overlay（节点式进度，与归集弹窗一致）──────────────────────────────
+function progressModalSteps() {
+  return document.querySelectorAll('#progressSteps .progress-step');
+}
+
+function resetUploadOverlaySteps() {
+  document.querySelectorAll('#uploadProgressSteps .progress-step').forEach(el => {
+    el.classList.remove('active', 'done', 'error');
+  });
+}
+
+/**
+ * @param {'upload'|'extract'|'done'|'error_upload'|'error_extract'} phase
+ */
+function setUploadOverlayPhase(phase, detail = '') {
+  const steps = document.querySelectorAll('#uploadProgressSteps .progress-step');
+  const detailEl = document.getElementById('loadingDetailText');
+  if (detailEl && detail !== undefined) detailEl.textContent = detail || '';
+  steps.forEach((el, i) => {
+    el.classList.remove('active', 'done', 'error');
+    if (phase === 'upload') {
+      if (i === 0) el.classList.add('active');
+    } else if (phase === 'extract') {
+      if (i === 0) el.classList.add('done');
+      if (i === 1) el.classList.add('active');
+    } else if (phase === 'done') {
+      el.classList.add('done');
+    } else if (phase === 'error_upload') {
+      if (i === 0) el.classList.add('error');
+    } else if (phase === 'error_extract') {
+      if (i === 0) el.classList.add('done');
+      if (i === 1) el.classList.add('error');
+    }
+  });
+}
+
+function showUploadOverlay() {
+  document.getElementById('uploadProgressTitle').textContent = t('uploadProgressTitle');
+  resetUploadOverlaySteps();
   document.getElementById('loadingOverlay').classList.remove('hidden');
 }
-function hideLoading() {
+
+function hideUploadOverlay() {
   document.getElementById('loadingOverlay').classList.add('hidden');
+  resetUploadOverlaySteps();
+  const detailEl = document.getElementById('loadingDetailText');
+  if (detailEl) detailEl.textContent = '';
+}
+
+/** 使用 XHR 以便在上传完成后切换到「抽取」节点 */
+function uploadInvoicesXHR(formData) {
+  return new Promise((resolve, reject) => {
+    let bodySent = false;
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/invoices/upload');
+    xhr.responseType = 'json';
+    xhr.upload.onload = () => {
+      bodySent = true;
+      setUploadOverlayPhase('extract', t('uploadExtractHint'));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response);
+        return;
+      }
+      let msg = xhr.statusText || t('requestFailed');
+      if (xhr.response && typeof xhr.response === 'object' && xhr.response.detail != null) {
+        const d = xhr.response.detail;
+        if (typeof d === 'string') msg = d;
+        else if (Array.isArray(d)) msg = d.map(x => (x && (x.msg || x.message)) || JSON.stringify(x)).join('; ');
+        else msg = JSON.stringify(d);
+      }
+      reject(Object.assign(new Error(msg), { _phase: bodySent ? 'extract' : 'upload' }));
+    };
+    xhr.onerror = () => {
+      reject(Object.assign(new Error(t('requestFailed')), { _phase: bodySent ? 'extract' : 'upload' }));
+    };
+    xhr.send(formData);
+  });
 }
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
@@ -195,16 +279,22 @@ async function handleFiles(files) {
   const formData = new FormData();
   for (const f of files) formData.append('files', f);
 
-  showLoading(t('loadingUploadExtract'));
+  showUploadOverlay();
+  setUploadOverlayPhase('upload', t('uploadSendingHint', { count: files.length }));
   try {
-    const uploaded = await fetch('/api/invoices/upload', { method: 'POST', body: formData })
-      .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail)));
+    const uploaded = await uploadInvoicesXHR(formData);
+    setUploadOverlayPhase('done');
+    document.getElementById('uploadProgressTitle').textContent = t('uploadDoneTitle');
     toast(t('uploadSuccess', { count: uploaded.length }), 'success');
     await loadInvoices();
+    await new Promise(r => setTimeout(r, 400));
   } catch (e) {
-    toast(t('uploadFailed', { error: e }), 'error');
+    const phase = e && e._phase === 'upload' ? 'error_upload' : 'error_extract';
+    setUploadOverlayPhase(phase, String(e.message || e));
+    toast(t('uploadFailed', { error: e.message || e }), 'error');
+    await new Promise(r => setTimeout(r, 600));
   } finally {
-    hideLoading();
+    hideUploadOverlay();
     fileInput.value = '';
   }
 }
@@ -475,8 +565,10 @@ function openProgressModal() {
   document.getElementById('progressErrorDetail').classList.add('hidden');
   document.getElementById('progressFooter').style.display = 'none';
   document.getElementById('progressClose').classList.add('hidden');
-  // 重置步骤点
-  document.querySelectorAll('.progress-step').forEach(el => {
+  const viewBtn = document.getElementById('btnViewResult');
+  if (viewBtn) viewBtn.style.display = '';
+  // 重置步骤点（仅归集弹窗，勿影响上传遮罩）
+  progressModalSteps().forEach(el => {
     el.classList.remove('active', 'done', 'error');
   });
   openModal('progressModal');
@@ -524,9 +616,10 @@ function handleProgressEvent(evt) {
   fill.style.width = `${percent}%`;
   document.getElementById('progressPct').textContent = `${percent}%`;
 
-  // 步骤点状态
-  document.querySelectorAll('.progress-step').forEach(el => {
-    const s = parseInt(el.dataset.step);
+  // 步骤点状态（仅归集弹窗）
+  progressModalSteps().forEach(el => {
+    const s = parseInt(el.dataset.step, 10);
+    if (Number.isNaN(s)) return;
     if (status === 'error') {
       if (s < step) el.classList.add('done');
       else if (s === step) { el.classList.remove('active'); el.classList.add('error'); }
@@ -559,8 +652,7 @@ function handleProgressEvent(evt) {
     document.getElementById('progressFooter').style.display = 'flex';
     document.getElementById('progressClose').classList.remove('hidden');
     if (_progressES) { _progressES.close(); _progressES = null; }
-    // 标记所有步骤完成
-    document.querySelectorAll('.progress-step').forEach(el => el.classList.add('done'));
+    progressModalSteps().forEach(el => el.classList.add('done'));
     toast('归集完成！', 'success');
   }
 
@@ -664,7 +756,7 @@ function renderCategoryCol(cat) {
   let bodyHtml = '';
 
   if (cat.groupable) {
-    // 有分组的大类（差旅/会议）
+    bodyHtml += `<div class="col-grouping-banner">${t('categoryGrouping')}</div>`;
     bodyHtml += cat.groups.map((g, gi) => renderGroupCard(g, cat)).join('');
     // 无组散票容器始终保留，便于空列时也可拖拽进入
     bodyHtml += `

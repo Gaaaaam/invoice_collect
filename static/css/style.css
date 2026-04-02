@@ -659,7 +659,46 @@ body {
   color: var(--gray-600);
 }
 .loading-overlay.hidden { display: none; }
-.loading-overlay .spinner { width: 36px; height: 36px; border-width: 3px; }
+
+/* 上传遮罩内：与归集弹窗一致的节点条 */
+.upload-progress-panel {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.12);
+  padding: 24px 28px 20px;
+  max-width: 480px;
+  width: calc(100% - 48px);
+  margin: 0 auto;
+}
+.upload-progress-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-800);
+  text-align: center;
+  margin-bottom: 18px;
+}
+.upload-progress-steps.progress-steps {
+  margin-bottom: 12px;
+}
+.upload-progress-detail {
+  font-size: 12px;
+  color: var(--gray-500);
+  text-align: center;
+  min-height: 18px;
+  line-height: 1.5;
+}
+
+/* 看板：可分组大类统一区域标题 */
+.col-grouping-banner {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-500);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid var(--gray-200);
+  margin: 0 -4px 8px;
+}
 
 /* ─── Empty State ────────────────────────────────────────────────────────────── */
 .empty-state {
