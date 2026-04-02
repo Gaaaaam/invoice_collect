@@ -18,7 +18,7 @@ class ProgressEvent:
     percent: int            # 0~100
     title: str              # 当前步骤标题
     message: str            # 详细描述
-    status: str = "running" # running / done / error
+    status: str = "running" # running / done / error / cancelled
     error: Optional[str] = None  # 仅 status=error 时有值
 
 
@@ -27,11 +27,22 @@ class ProgressManager:
 
     def __init__(self) -> None:
         self._queues: dict[str, asyncio.Queue[ProgressEvent]] = {}
+        self._cancelled_tasks: set[str] = set()
 
     def create_task(self) -> str:
         task_id = uuid.uuid4().hex
         self._queues[task_id] = asyncio.Queue()
         return task_id
+
+    def request_cancel(self, task_id: str) -> bool:
+        """请求取消进行中的归集任务。若任务不存在或已结束则返回 False。"""
+        if task_id not in self._queues:
+            return False
+        self._cancelled_tasks.add(task_id)
+        return True
+
+    def is_cancelled(self, task_id: str) -> bool:
+        return task_id in self._cancelled_tasks
 
     async def emit(self, task_id: str, event: ProgressEvent) -> None:
         queue = self._queues.get(task_id)
@@ -47,7 +58,7 @@ class ProgressManager:
             while True:
                 event = await asyncio.wait_for(queue.get(), timeout=120)
                 yield event
-                if event.status in ("done", "error"):
+                if event.status in ("done", "error", "cancelled"):
                     break
         except asyncio.TimeoutError:
             yield ProgressEvent(
@@ -57,6 +68,7 @@ class ProgressManager:
             )
         finally:
             self._queues.pop(task_id, None)
+            self._cancelled_tasks.discard(task_id)
 
     def cleanup(self, task_id: str) -> None:
         self._queues.pop(task_id, None)

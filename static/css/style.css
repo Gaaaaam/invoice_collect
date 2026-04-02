@@ -774,6 +774,9 @@ hr.divider { border: none; border-top: 1px solid var(--gray-200); margin: 12px 0
 .progress-bar-fill.done {
   background: linear-gradient(90deg, var(--success), #34d399);
 }
+.progress-bar-fill.cancelled {
+  background: var(--gray-400);
+}
 .progress-bar-fill.error {
   background: linear-gradient(90deg, var(--danger), #f87171);
 }
@@ -802,6 +805,11 @@ hr.divider { border: none; border-top: 1px solid var(--gray-200); margin: 12px 0
   border-left-color: var(--danger);
   color: var(--danger);
   background: #fef2f2;
+}
+.progress-current.cancelled {
+  border-left-color: var(--gray-400);
+  color: var(--gray-700);
+  background: var(--gray-100);
 }
 
 .progress-steps {
@@ -897,6 +905,7 @@ hr.divider { border: none; border-top: 1px solid var(--gray-200); margin: 12px 0
 .log-time { color: var(--gray-400); flex-shrink: 0; }
 .log-msg { flex: 1; word-break: break-all; }
 .log-entry.log-error .log-msg { color: var(--danger); }
+.log-entry.log-cancelled .log-msg { color: var(--gray-600); font-weight: 500; }
 .log-entry.log-done .log-msg { color: var(--success); font-weight: 600; }
 
 .progress-error {

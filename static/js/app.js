@@ -48,6 +48,10 @@ const I18N = {
     uploadStepSend: '上传文件', uploadStepExtract: '识别与抽取', uploadStepFinish: '完成',
     progressStepPrepare: '准备中', progressStepClassify: '发票分类', progressStepGroup: '分组',
     progressStepSave: '保存结果', progressStepDone: '归集完成',
+    btnProgressCancel: '取消', progressCancelling: '取消中…',
+    progressCancelFailed: '取消请求失败：{error}',
+    progressCancelledTitle: '归集已取消', progressCancelledDetail: '本次归集已取消，未保存任何结果。',
+    progressCancelledToast: '已取消本次归集',
     categoryGrouping: '分组',
     uploadSuccess: '成功上传 {count} 张发票', uploadFailed: '上传失败：{error}',
     emptyBoard: '点击「开始归集」按钮对发票进行自动归集分类',
@@ -78,6 +82,11 @@ const I18N = {
     uploadStepSend: 'Upload', uploadStepExtract: 'Extract', uploadStepFinish: 'Done',
     progressStepPrepare: 'Preparing', progressStepClassify: 'Classification', progressStepGroup: 'Grouping',
     progressStepSave: 'Saving', progressStepDone: 'Complete',
+    btnProgressCancel: 'Cancel', progressCancelling: 'Cancelling…',
+    progressCancelFailed: 'Could not cancel: {error}',
+    progressCancelledTitle: 'Collection cancelled',
+    progressCancelledDetail: 'Cancelled. No changes were saved.',
+    progressCancelledToast: 'Collection was cancelled',
     categoryGrouping: 'Groups',
     uploadSuccess: 'Uploaded {count} invoice(s)', uploadFailed: 'Upload failed: {error}',
     emptyBoard: 'Click "Start Collection" to classify invoices',
@@ -495,6 +504,8 @@ async function batchDeleteSelectedInvoices() {
 // ─── Process (归集) + SSE Progress Modal ─────────────────────────────────────
 
 let _progressES = null; // 当前 EventSource 引用
+let _collectionTaskId = null;
+let _progressSSEIntentionalClose = false;
 
 // 归集选项下拉面板
 function toggleProcessOptions(e) {
@@ -565,6 +576,12 @@ function openProgressModal() {
   document.getElementById('progressErrorDetail').classList.add('hidden');
   document.getElementById('progressFooter').style.display = 'none';
   document.getElementById('progressClose').classList.add('hidden');
+  const cancelBtn = document.getElementById('progressCancel');
+  if (cancelBtn) {
+    cancelBtn.classList.remove('hidden');
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = t('btnProgressCancel');
+  }
   const viewBtn = document.getElementById('btnViewResult');
   if (viewBtn) viewBtn.style.display = '';
   // 重置步骤点（仅归集弹窗，勿影响上传遮罩）
@@ -575,8 +592,25 @@ function openProgressModal() {
 }
 
 function closeProgressModal() {
+  _progressSSEIntentionalClose = true;
   if (_progressES) { _progressES.close(); _progressES = null; }
+  _collectionTaskId = null;
   closeModal('progressModal');
+}
+
+async function cancelCollectionProcess() {
+  const btn = document.getElementById('progressCancel');
+  if (!btn || btn.classList.contains('hidden') || btn.disabled) return;
+  if (!_collectionTaskId) return;
+  btn.disabled = true;
+  btn.textContent = t('progressCancelling');
+  try {
+    await api('POST', `/api/collections/cancel/${_collectionTaskId}`);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = t('btnProgressCancel');
+    toast(t('progressCancelFailed', { error: e.message }), 'warning');
+  }
 }
 
 function toggleErrorDetail() {
@@ -588,8 +622,10 @@ function toggleErrorDetail() {
 
 // ── SSE 订阅 ──────────────────────────────────────────────────────────────────
 function startProgressSSE(taskId) {
-  if (_progressES) { _progressES.close(); }
+  if (_progressES) { _progressSSEIntentionalClose = true; _progressES.close(); }
 
+  _collectionTaskId = taskId;
+  _progressSSEIntentionalClose = false;
   _progressES = new EventSource(`/api/collections/stream/${taskId}`);
 
   _progressES.onmessage = (e) => {
@@ -602,14 +638,21 @@ function startProgressSSE(taskId) {
   };
 
   _progressES.onerror = () => {
-    _progressES.close();
+    const es = _progressES;
     _progressES = null;
-    appendLog('SSE 连接中断', 'error');
+    if (es) es.close();
+    if (!_progressSSEIntentionalClose) {
+      appendLog('SSE 连接中断', 'error');
+    }
+    _progressSSEIntentionalClose = false;
+    _collectionTaskId = null;
   };
 }
 
 function handleProgressEvent(evt) {
   const { step, total, percent, title, message, status, error } = evt;
+
+  const displayMsg = status === 'cancelled' ? t('progressCancelledDetail') : message;
 
   // 进度条
   const fill = document.getElementById('progressBarFill');
@@ -620,9 +663,16 @@ function handleProgressEvent(evt) {
   progressModalSteps().forEach(el => {
     const s = parseInt(el.dataset.step, 10);
     if (Number.isNaN(s)) return;
-    if (status === 'error') {
-      if (s < step) el.classList.add('done');
-      else if (s === step) { el.classList.remove('active'); el.classList.add('error'); }
+    if (status === 'error' || status === 'cancelled') {
+      if (s < step) {
+        el.classList.remove('active');
+        el.classList.add('done');
+      } else if (s === step) {
+        el.classList.remove('active');
+        el.classList.add('error');
+      } else {
+        el.classList.remove('active', 'done', 'error');
+      }
     } else {
       if (s < step) el.classList.add('done');
       else if (s === step) { el.classList.remove('done'); el.classList.add('active'); }
@@ -632,26 +682,38 @@ function handleProgressEvent(evt) {
 
   // 当前步骤描述
   const currentEl = document.getElementById('progressCurrent');
-  currentEl.textContent = message;
-  currentEl.className = 'progress-current' + (status === 'error' ? ' error' : '');
+  currentEl.textContent = displayMsg;
+  let curCls = 'progress-current';
+  if (status === 'error') curCls += ' error';
+  else if (status === 'cancelled') curCls += ' cancelled';
+  currentEl.className = curCls;
 
   // 滚动日志
-  appendLog(message, status === 'error' ? 'error' : (status === 'done' ? 'done' : ''));
+  const logType = status === 'error' ? 'error' : (status === 'done' ? 'done' : (status === 'cancelled' ? 'cancelled' : ''));
+  appendLog(displayMsg, logType);
 
   // 标题
   document.getElementById('progressTitle').textContent =
     status === 'done' ? '归集完成 ✓' :
     status === 'error' ? '归集出错 ✕' :
+    status === 'cancelled' ? t('progressCancelledTitle') :
     title || '正在归集…';
   document.getElementById('progressIcon').textContent =
-    status === 'done' ? '✅' : status === 'error' ? '❌' : '⚙️';
+    status === 'done' ? '✅' : status === 'error' ? '❌' : status === 'cancelled' ? '⏹' : '⚙️';
+
+  const cancelBtn = document.getElementById('progressCancel');
+  if (cancelBtn && (status === 'done' || status === 'error' || status === 'cancelled')) {
+    cancelBtn.classList.add('hidden');
+  }
 
   // 完成 / 错误处理
   if (status === 'done') {
     fill.classList.add('done');
     document.getElementById('progressFooter').style.display = 'flex';
     document.getElementById('progressClose').classList.remove('hidden');
+    _progressSSEIntentionalClose = true;
     if (_progressES) { _progressES.close(); _progressES = null; }
+    _collectionTaskId = null;
     progressModalSteps().forEach(el => el.classList.add('done'));
     toast('归集完成！', 'success');
   }
@@ -667,8 +729,23 @@ function handleProgressEvent(evt) {
     if (error) {
       document.getElementById('progressErrorDetail').textContent = error;
     }
+    _progressSSEIntentionalClose = true;
     if (_progressES) { _progressES.close(); _progressES = null; }
+    _collectionTaskId = null;
     toast('归集过程出错，请查看进度弹窗', 'error');
+  }
+
+  if (status === 'cancelled') {
+    fill.classList.add('cancelled');
+    document.getElementById('progressFooter').style.display = 'flex';
+    document.getElementById('progressClose').classList.remove('hidden');
+    document.getElementById('btnViewResult').style.display = 'none';
+    document.getElementById('progressError').classList.add('hidden');
+    _progressSSEIntentionalClose = true;
+    if (_progressES) { _progressES.close(); _progressES = null; }
+    _collectionTaskId = null;
+    toast(t('progressCancelledToast'), 'warning');
+    loadCollectionResult();
   }
 }
 

@@ -41,6 +41,25 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 logger = logging.getLogger(__name__)
 
 
+async def _exit_if_collection_cancelled(task_id: str, db: AsyncSession) -> bool:
+    """若用户已请求取消，回滚当前事务并推送 cancelled 事件。返回 True 时应立即结束归集任务。"""
+    if not progress_manager.is_cancelled(task_id):
+        return False
+    await db.rollback()
+    await progress_manager.emit(
+        task_id,
+        ProgressEvent(
+            step=0,
+            total=4,
+            percent=0,
+            title="已取消",
+            message="已取消本次归集，未保存任何结果（含已处理部分）。",
+            status="cancelled",
+        ),
+    )
+    return True
+
+
 def _load_categories() -> list[dict]:
     with open(CATEGORIES_CONFIG_PATH, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -110,7 +129,7 @@ async def stream_progress(task_id: str):
                 "error": event.error,
             }, ensure_ascii=False)
             yield f"data: {payload}\n\n"
-            if event.status in ("done", "error"):
+            if event.status in ("done", "error", "cancelled"):
                 break
 
     return StreamingResponse(
@@ -121,6 +140,14 @@ async def stream_progress(task_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/cancel/{task_id}", response_model=MessageResponse)
+async def cancel_collection_task(task_id: str):
+    """请求取消进行中的归集任务；后台任务在检查点回滚事务，不写入任何结果。"""
+    if progress_manager.request_cancel(task_id):
+        return MessageResponse(message="已发送取消请求")
+    raise HTTPException(status_code=404, detail="任务不存在或已结束")
 
 
 async def _run_collection(task_id: str, request: ProcessRequest) -> None:
@@ -155,6 +182,9 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             total_inv = len(invoices)
             await emit(0, 4, 8, "准备中", f"共找到 {total_inv} 张可处理发票")
 
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
+
             logger.info(
                 "collection task_id=%s invoices=%s force_reclassify=%s use_subcategory=%s use_rules=%s use_llm=%s",
                 task_id,
@@ -171,6 +201,9 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             # ── Step 1: 发票分类（规则 + LLM）────────────────────────────────
             await emit(1, 4, 10, "发票分类", f"开始对 {total_inv} 张发票进行分类…")
 
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
+
             category_buckets: dict[str, list[Invoice]] = {c["id"]: [] for c in categories}
             category_buckets["unclassified"] = []
 
@@ -181,6 +214,8 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             rule_count = llm_count = skip_count = 0
 
             for i, inv in enumerate(invoices):
+                if await _exit_if_collection_cancelled(task_id, db):
+                    return
                 pct = classify_step_range[0] + int(
                     (i / total_inv) * (classify_step_range[1] - classify_step_range[0])
                 )
@@ -192,6 +227,8 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                         use_rules=request.use_rules,
                         use_llm=request.use_llm,
                     )
+                    if await _exit_if_collection_cancelled(task_id, db):
+                        return
                     if cat_id not in category_map:
                         cat_id = "other"
                     category_buckets.setdefault(cat_id, []).append(inv)
@@ -225,17 +262,28 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                         category_buckets.setdefault(existing.category_id, []).append(inv)
                     await emit(1, 4, pct, "发票分类",
                                f"[{i+1}/{total_inv}] {inv.filename or inv.id} — 已有分类，跳过")
+                    if await _exit_if_collection_cancelled(task_id, db):
+                        return
 
             await db.flush()
+
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
 
             summary = f"分类完成：规则匹配 {rule_count} 张，AI判别 {llm_count} 张，跳过 {skip_count} 张"
             await emit(1, 4, 65, "发票分类", summary)
             logger.info("collection task_id=%s classify_summary %s", task_id, summary)
 
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
+
             # ── Step 2: 分组（差旅闭环 + 会议等可分组大类）──────────────────────
             travel_invoices = category_buckets.get("travel", [])
             await emit(2, 4, 68, "分组",
                        f"差旅：共 {len(travel_invoices)} 张发票，开始行程/闭环检测…")
+
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
 
             if travel_invoices:
                 travel_dicts = [_invoice_to_dict(inv) for inv in travel_invoices]
@@ -268,6 +316,8 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 )
 
                 for idx, loop in enumerate(loops):
+                    if await _exit_if_collection_cancelled(task_id, db):
+                        return
                     group = CollectionGroup(
                         name=build_travel_group_name(loop, idx),
                         category_id="travel",
@@ -293,9 +343,15 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             else:
                 await emit(2, 4, 75, "分组", "差旅：无差旅费发票，跳过")
 
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
+
             meeting_invoices = category_buckets.get("meeting", [])
             await emit(2, 4, 80, "分组",
                        f"会议：共 {len(meeting_invoices)} 张发票，开始分组…")
+
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
 
             if meeting_invoices:
                 meeting_dicts = [_invoice_to_dict(inv) for inv in meeting_invoices]
@@ -319,6 +375,8 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
 
                 inv_id_to_dict = {inv.id: _invoice_to_dict(inv) for inv in meeting_invoices}
                 for idx, id_list in enumerate(meeting_groups):
+                    if await _exit_if_collection_cancelled(task_id, db):
+                        return
                     group_inv_dicts = [inv_id_to_dict[i] for i in id_list if i in inv_id_to_dict]
                     group = CollectionGroup(
                         name=build_meeting_group_name(group_inv_dicts, idx),
@@ -347,8 +405,15 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             else:
                 await emit(2, 4, 88, "分组", "会议：无会议费发票，跳过")
 
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
+
             # ── Step 3: 提交保存 ──────────────────────────────────────────────
             await emit(3, 4, 92, "保存结果", "正在写入数据库…")
+
+            if await _exit_if_collection_cancelled(task_id, db):
+                return
+
             await db.commit()
             await emit(3, 4, 98, "保存结果", "数据库写入完成")
 
