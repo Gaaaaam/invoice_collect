@@ -1,10 +1,19 @@
 llm:
-  base_url: "http://192.168.1.107:7225/v1"
-  api_key: "sk-your-api-key-here"
-  model: "instruct_model"
+  base_url: your-base-url
+  api_key: your-api-key
+  model: your-model-name
+  timeout: 60
+nuextract:
+  host: your-host
+  port: your-port
   timeout: 60
 
-nuextract:
-  host: "192.168.1.107"
-  port: 8080
-  timeout: 60
+# 抽取策略：nuextract 仅远程服务；ocr_fallback 仅用本地 PDF 文字层 + OCR；auto 先 NuExtract 失败再保底
+# 无 NuExtract 时请设 provider: ocr_fallback 或保持 auto，并安装 pip install -r requirements-ocr.txt
+extraction:
+  provider: auto
+  use_llm_on_fallback: false
+  ocr:
+    engine: rapidocr_onnx
+    pdf_max_pages: 3
+    min_text_chars: 80
