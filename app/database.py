@@ -1,6 +1,11 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 import os
+import logging
+
+from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATABASE_URL = f"sqlite+aiosqlite:///{os.path.join(BASE_DIR, 'invoice_collect.db')}"
@@ -37,7 +42,10 @@ def _migrate_add_columns(conn):
     ]
     for sql in migrations:
         try:
-            conn.execute(__import__("sqlalchemy").text(sql))
-        except Exception:
-            # 列已存在时 SQLite 会报错，忽略即可
-            pass
+            conn.execute(text(sql))
+        except Exception as e:
+            # 列已存在时 SQLite 会报 "duplicate column name"；其余错误保留并抛出
+            if "duplicate column name" in str(e).lower():
+                continue
+            logger.exception("数据库迁移失败: %s", sql)
+            raise
