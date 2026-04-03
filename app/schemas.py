@@ -141,9 +141,26 @@ class NuExtractConfig(BaseModel):
     timeout: int = 60
 
 
+class ExtractionOCRConfig(BaseModel):
+    engine: str = "rapidocr_onnx"
+    pdf_max_pages: int = 3
+    min_text_chars: int = 80
+
+
+class ExtractionConfig(BaseModel):
+    provider: str = "auto"
+    use_llm_on_fallback: bool = False
+    ocr: ExtractionOCRConfig = Field(default_factory=ExtractionOCRConfig)
+
+
 class ModelsConfig(BaseModel):
     llm: LLMConfig
     nuextract: NuExtractConfig
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+
+
+class TravelConfig(BaseModel):
+    home_city: str = "上海"
 
 
 # ─── 通用响应 ────────────────────────────────────────────────────────────────
