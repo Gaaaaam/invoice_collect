@@ -58,7 +58,7 @@ async def upload_invoices(
         db.add(invoice)
         await db.flush()
 
-        # 异步抽取发票信息
+        # 异步抽取发票信息（NuExtract 与/或本地 OCR 保底）
         try:
             extractor = get_extractor()
             extracted = await extractor.extract_from_file(
@@ -66,7 +66,7 @@ async def upload_invoices(
                 filename_hint=file.filename or unique_name,
             )
             _apply_extracted(invoice, extracted)
-            invoice.extract_status = "done"
+            invoice.extract_status = "error" if extracted.get("error") else "done"
         except Exception as e:
             invoice.extract_status = "error"
             print(f"[invoices] extract error for {file.filename}: {e}")
@@ -231,7 +231,14 @@ async def re_extract_invoice(invoice_id: int, db: AsyncSession = Depends(get_db)
             filename_hint=invoice.filename,
         )
         _apply_extracted(invoice, extracted)
+        if extracted.get("error"):
+            invoice.extract_status = "error"
+            await db.commit()
+            await db.refresh(invoice)
+            raise HTTPException(status_code=502, detail=f"抽取失败：{extracted.get('error')}")
         invoice.extract_status = "done"
+    except HTTPException:
+        raise
     except Exception as e:
         invoice.extract_status = "error"
         raise HTTPException(status_code=500, detail=f"抽取失败：{e}")

@@ -330,10 +330,34 @@ def _extract_nuextract_payload(raw: Any) -> dict:
 # 工具函数
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_nuextract_config() -> dict:
+def load_models_config() -> dict:
     with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    return config.get("nuextract", {})
+        return yaml.safe_load(f) or {}
+
+
+def load_nuextract_config() -> dict:
+    return load_models_config().get("nuextract", {})
+
+
+_DEFAULT_EXTRACTION: dict = {
+    "provider": "auto",
+    "use_llm_on_fallback": False,
+    "ocr": {
+        "engine": "rapidocr_onnx",
+        "pdf_max_pages": 3,
+        "min_text_chars": 80,
+    },
+}
+
+
+def load_extraction_config() -> dict:
+    raw = load_models_config().get("extraction") or {}
+    out = {**_DEFAULT_EXTRACTION, **{k: v for k, v in raw.items() if k != "ocr"}}
+    ocr_base = dict(_DEFAULT_EXTRACTION["ocr"])
+    ocr_user = raw.get("ocr") if isinstance(raw.get("ocr"), dict) else {}
+    ocr_base.update(ocr_user)
+    out["ocr"] = ocr_base
+    return out
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -707,14 +731,13 @@ class InvoiceExtractor:
         self.host = cfg.get("host", "localhost")
         self.port = cfg.get("port", 8000)
         self.timeout = cfg.get("timeout", 60)
+        self.extraction_cfg = load_extraction_config()
 
-    async def extract_from_file(self, file_path: str, filename_hint: Optional[str] = None) -> dict:
-        """
-        自动识别发票类型，选择对应模板，调用 NuExtract 抽取。
-        """
-        filename_for_detect = filename_hint or os.path.basename(file_path)
+    async def _nuextract_extract_from_path(
+        self, file_path: str, filename_for_detect: str
+    ) -> dict:
+        """仅调用 NuExtract；失败返回 {\"error\": ...}，不抛异常。"""
         inv_type = detect_invoice_type(filename_for_detect)
-
         async with NuExtractClient(self.host, self.port, self.timeout) as client:
             try:
                 template = TEMPLATES.get(inv_type, TEMPLATE_GENERAL)
@@ -724,12 +747,10 @@ class InvoiceExtractor:
                 )
                 raw = self._pick_first_result(raw_result)
 
-                # 若文件名无法判断类型，用抽取内容二次确认
                 if inv_type == "general":
                     content_hint = str(raw)
                     refined_type = detect_invoice_type("", content_hint)
                     if refined_type not in ("general",):
-                        # 用精确模板重新抽取
                         raw_result2 = await client.extract_from_files(
                             file_paths=[file_path],
                             template=TEMPLATES[refined_type],
@@ -737,16 +758,14 @@ class InvoiceExtractor:
                         raw = self._pick_first_result(raw_result2)
                         inv_type = refined_type
                     else:
-                        # 默认当作电子发票（普通发票）处理，捕获备注
                         inv_type = "general_invoice"
 
                 return _normalize_result(raw, inv_type)
             except Exception as e:
-                print(f"[InvoiceExtractor] extract_from_file error ({filename_for_detect}): {e}")
+                print(f"[InvoiceExtractor] NuExtract path error ({filename_for_detect}): {e}")
                 return {"error": str(e), "is_transport": False}
 
-    async def extract_from_base64(self, b64_data: str, filename: str) -> dict:
-        """从 base64 编码的发票数据中抽取结构化信息。"""
+    async def _nuextract_extract_from_base64(self, b64_data: str, filename: str) -> dict:
         inv_type = detect_invoice_type(filename)
         async with NuExtractClient(self.host, self.port, self.timeout) as client:
             try:
@@ -773,8 +792,69 @@ class InvoiceExtractor:
 
                 return _normalize_result(raw, inv_type)
             except Exception as e:
-                print(f"[InvoiceExtractor] extract_from_base64 error ({filename}): {e}")
+                print(f"[InvoiceExtractor] NuExtract base64 error ({filename}): {e}")
                 return {"error": str(e), "is_transport": False}
+
+    async def extract_from_file(self, file_path: str, filename_hint: Optional[str] = None) -> dict:
+        """
+        按 extraction.provider 选择 NuExtract、本地 OCR 保底或自动降级。
+        """
+        from app.services.fallback_extract import extract_invoice_local_fallback
+
+        filename_for_detect = filename_hint or os.path.basename(file_path)
+        provider = (self.extraction_cfg.get("provider") or "auto").strip().lower()
+        ocr_cfg = self.extraction_cfg.get("ocr") or {}
+
+        want_nx = provider in ("nuextract", "auto")
+        want_fb = provider in ("ocr_fallback", "auto")
+
+        nx_error: Optional[str] = None
+        if want_nx:
+            nx_res = await self._nuextract_extract_from_path(file_path, filename_for_detect)
+            if not nx_res.get("error"):
+                nx_res["extract_method"] = "nuextract"
+                return nx_res
+            nx_error = nx_res.get("error")
+
+        if want_fb:
+            fb = extract_invoice_local_fallback(file_path, filename_for_detect, ocr_cfg)
+            if nx_error:
+                fb["nuextract_error"] = nx_error
+            if not fb.get("error"):
+                fb["extract_method"] = "ocr_fallback"
+            return fb
+
+        err = nx_error or "NuExtract 不可用且未启用本地 OCR（extraction.provider=nuextract）"
+        return {"error": err, "is_transport": False}
+
+    async def extract_from_base64(self, b64_data: str, filename: str) -> dict:
+        """从 base64 编码的发票数据中抽取结构化信息。"""
+        from app.services.fallback_extract import extract_invoice_local_fallback_from_base64
+
+        provider = (self.extraction_cfg.get("provider") or "auto").strip().lower()
+        ocr_cfg = self.extraction_cfg.get("ocr") or {}
+
+        want_nx = provider in ("nuextract", "auto")
+        want_fb = provider in ("ocr_fallback", "auto")
+
+        nx_error: Optional[str] = None
+        if want_nx:
+            nx_res = await self._nuextract_extract_from_base64(b64_data, filename)
+            if not nx_res.get("error"):
+                nx_res["extract_method"] = "nuextract"
+                return nx_res
+            nx_error = nx_res.get("error")
+
+        if want_fb:
+            fb = extract_invoice_local_fallback_from_base64(b64_data, filename, ocr_cfg)
+            if nx_error:
+                fb["nuextract_error"] = nx_error
+            if not fb.get("error"):
+                fb["extract_method"] = "ocr_fallback"
+            return fb
+
+        err = nx_error or "NuExtract 不可用且未启用本地 OCR（extraction.provider=nuextract）"
+        return {"error": err, "is_transport": False}
 
     @staticmethod
     def _pick_first_result(raw_result: Any) -> dict:
