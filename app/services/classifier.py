@@ -12,18 +12,40 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 RULES_CONFIG_PATH = os.path.join(BASE_DIR, "config", "rules.yml")
 CATEGORIES_CONFIG_PATH = os.path.join(BASE_DIR, "config", "categories.yml")
 
+_RULES_CACHE: dict = {"mtime": None, "data": []}
+_CATEGORIES_CACHE: dict = {"mtime": None, "data": []}
+
+
+def _load_yaml_list_with_cache(path: str, key: str, cache: dict) -> list[dict]:
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        logger.warning("配置文件不存在: %s", path)
+        cache["mtime"] = None
+        cache["data"] = []
+        return []
+
+    if cache.get("mtime") == mtime:
+        return cache.get("data", [])
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    values = data.get(key, [])
+    if not isinstance(values, list):
+        values = []
+
+    cache["mtime"] = mtime
+    cache["data"] = values
+    return values
+
 
 def load_rules() -> list[dict]:
-    with open(RULES_CONFIG_PATH, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    rules = data.get("rules", [])
+    rules = _load_yaml_list_with_cache(RULES_CONFIG_PATH, "rules", _RULES_CACHE)
     return sorted(rules, key=lambda r: r.get("priority", 50))
 
 
 def load_categories() -> list[dict]:
-    with open(CATEGORIES_CONFIG_PATH, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return data.get("categories", [])
+    return _load_yaml_list_with_cache(CATEGORIES_CONFIG_PATH, "categories", _CATEGORIES_CACHE)
 
 
 def _match_condition(invoice: dict, condition: dict) -> bool:
