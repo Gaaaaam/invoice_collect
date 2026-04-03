@@ -19,6 +19,8 @@ const state = {
 
 const ARCHIVE_STORAGE_KEY = 'invoice_collect_archive_v1';
 const ARCHIVE_PANEL_KEY = 'invoice_collect_archive_panel_visible';
+/** 各费用类型「未分组」自定义显示名（localStorage） */
+const UNGROUPED_LABEL_STORAGE_PREFIX = 'invoice_collect_ungrouped_label_v1_';
 
 let _dragContext = null; // 记录拖拽开始时的选择上下文
 let _archivePanelUiBound = false;
@@ -27,6 +29,44 @@ let _archivePanelUiBound = false;
 const CAT_ICONS = {
   travel: '✈️', meeting: '📋', material: '📦', other: '🗂️',
 };
+/** 看板分组标题前图标（与费用类型一致） */
+const GROUP_ICONS = {
+  travel: '🌏',
+  meeting: '📋',
+  material: '📦',
+  other: '🗂️',
+};
+
+function groupIconForCategory(categoryId) {
+  return GROUP_ICONS[categoryId] || '📁';
+}
+
+function getUngroupedDisplayName(categoryId) {
+  try {
+    const raw = localStorage.getItem(UNGROUPED_LABEL_STORAGE_PREFIX + categoryId);
+    if (raw != null && String(raw).trim()) return String(raw).trim();
+  } catch (_) { /* ignore */ }
+  return t('ungrouped');
+}
+
+/** 有效金额数值：价税合计优先，否则金额+税额；无任何金额字段则为 null */
+function invoiceEffectiveAmountNumber(inv) {
+  if (!inv) return null;
+  if (inv.total_amount != null && Number.isFinite(Number(inv.total_amount))) {
+    return Number(inv.total_amount);
+  }
+  const na = inv.amount != null && Number.isFinite(Number(inv.amount)) ? Number(inv.amount) : null;
+  const nt = inv.tax_amount != null && Number.isFinite(Number(inv.tax_amount)) ? Number(inv.tax_amount) : null;
+  if (na != null || nt != null) return (na || 0) + (nt || 0);
+  return null;
+}
+
+/** 卡片/列表展示用金额 */
+function formatInvoiceAmountDisplay(inv) {
+  const n = invoiceEffectiveAmountNumber(inv);
+  return n != null ? `¥${n.toFixed(2)}` : '';
+}
+
 const CAT_COLORS = {
   travel: 'travel', meeting: 'meeting', material: 'material', other: 'other',
 };
@@ -369,7 +409,7 @@ function renderInvoiceList() {
       <div class="invoice-meta">
         <div class="invoice-name">${escHtml(inv.filename)}</div>
         <div class="invoice-sub">
-          ${inv.total_amount != null ? '¥' + inv.total_amount.toFixed(2) : ''}
+          ${formatInvoiceAmountDisplay(inv)}
           ${inv.issue_date ? ' · ' + inv.issue_date.slice(0, 10) : ''}
         </div>
       </div>
@@ -503,7 +543,7 @@ function buildArchiveEntryPayload(categoryId, groupIdOpt) {
     gidStore = gid;
   } else {
     invoiceIds = (cat.ungrouped_invoices || []).map(i => i.id).filter(id => !archived.has(id));
-    groupName = '';
+    groupName = getUngroupedDisplayName(categoryId);
     gidStore = null;
   }
   if (!invoiceIds.length) return null;
@@ -695,7 +735,7 @@ function renderArchivePanel() {
     const rows = (ent.invoiceIds || []).map(id => {
       const inv = findInvoiceInResult(id);
       const title = inv?.invoice_type || inv?.filename || `#${id}`;
-      const amt = inv?.total_amount != null ? `¥${Number(inv.total_amount).toFixed(2)}` : '';
+      const amt = formatInvoiceAmountDisplay(inv);
       const date = (inv?.issue_date || '').slice(0, 10);
       return `
         <div class="archive-inv-row">
@@ -1278,8 +1318,8 @@ function renderCategoryCol(cat) {
         <div class="group-header" onclick="toggleGroup(event, this)">
           <input type="checkbox" class="board-archive-select" onclick="event.stopPropagation()"
                  title="${escAttr(t('batchArchive'))}" aria-label="${escAttr(t('batchArchive'))}" />
-          <span class="group-icon">📄</span>
-          <span class="group-name">${t('ungrouped')}</span>
+          <span class="group-icon">${groupIconForCategory(cat.category_id)}</span>
+          <span class="group-name" ondblclick="renameUngroupedLabel(event, '${cat.category_id}', this)">${escHtml(getUngroupedDisplayName(cat.category_id))}</span>
           <span class="group-count">${t('invoiceCount', { count: cat.ungrouped_invoices?.length || 0 })}</span>
           <button type="button" class="btn btn-outline btn-sm btn-archive-group"
                   data-archive-cat="${escAttr(cat.category_id)}" data-archive-gid=""
@@ -1325,7 +1365,7 @@ function renderCategoryCol(cat) {
 }
 
 function renderGroupCard(group, cat) {
-  const icon = cat.category_id === 'travel' ? '🗺️' : '📋';
+  const icon = groupIconForCategory(cat.category_id);
   const dateRange = group.start_date
     ? `${group.start_date}${group.end_date && group.end_date !== group.start_date ? ' ~ ' + group.end_date : ''}`
     : '';
@@ -1336,7 +1376,7 @@ function renderGroupCard(group, cat) {
         <input type="checkbox" class="board-archive-select" onclick="event.stopPropagation()"
                title="${escAttr(t('batchArchive'))}" aria-label="${escAttr(t('batchArchive'))}" />
         <span class="group-icon">${icon}</span>
-        <span class="group-name" ondblclick="renameGroup(${group.id}, this)">${escHtml(group.name)}</span>
+        <span class="group-name" ondblclick="renameGroup(event, ${group.id}, this)">${escHtml(group.name)}</span>
         ${dateRange ? `<span class="group-count text-muted" style="font-size:10px">${dateRange}</span>` : ''}
         <span class="group-count">${t('invoiceCount', { count: group.invoices.length })}</span>
         <button type="button" class="btn btn-outline btn-sm btn-archive-group"
@@ -1373,7 +1413,7 @@ function renderUnclassifiedCol(invoices) {
 function renderInvCard(inv, categoryId, groupId) {
   const labels = classifiedByLabels();
   const [tagClass, tagLabel] = labels[inv.classified_by] || labels.default;
-  const amt = inv.total_amount != null ? `¥${Number(inv.total_amount).toFixed(2)}` : '';
+  const amt = formatInvoiceAmountDisplay(inv);
   const date = (inv.issue_date || '').slice(0, 10);
   const selectedClass = state.selectedInvoiceIds.has(inv.id) ? 'selected' : '';
   return `
@@ -1561,16 +1601,45 @@ function toggleGroup(ev, header) {
   toggle.classList.toggle('collapsed');
 }
 
-async function renameGroup(groupId, nameEl) {
-  const current = nameEl.textContent;
+async function renameGroup(ev, groupId, nameEl) {
+  if (ev) {
+    ev.stopPropagation();
+    ev.preventDefault();
+  }
+  const current = nameEl.textContent.trim();
   const newName = prompt('修改分组名称：', current);
-  if (!newName || newName === current) return;
+  if (!newName || !newName.trim() || newName.trim() === current) return;
+  const trimmed = newName.trim();
   try {
-    await api('PATCH', `/api/collections/groups/${groupId}`, { name: newName });
-    nameEl.textContent = newName;
+    await api('PATCH', `/api/collections/groups/${groupId}`, { name: trimmed });
+    nameEl.textContent = trimmed;
     toast('分组名称已更新', 'success');
   } catch (e) {
     toast(`更新失败：${e}`, 'error');
+  }
+}
+
+function renameUngroupedLabel(ev, categoryId, nameEl) {
+  if (ev) {
+    ev.stopPropagation();
+    ev.preventDefault();
+  }
+  const current = nameEl.textContent.trim();
+  const newName = prompt('修改分组名称：', current);
+  if (!newName || !newName.trim() || newName.trim() === current) return;
+  const trimmed = newName.trim();
+  try {
+    const def = t('ungrouped');
+    if (trimmed === def) {
+      localStorage.removeItem(UNGROUPED_LABEL_STORAGE_PREFIX + categoryId);
+      nameEl.textContent = def;
+    } else {
+      localStorage.setItem(UNGROUPED_LABEL_STORAGE_PREFIX + categoryId, trimmed);
+      nameEl.textContent = trimmed;
+    }
+    toast('分组名称已更新', 'success');
+  } catch (e) {
+    toast(`更新失败：${e.message || e}`, 'error');
   }
 }
 
@@ -1612,7 +1681,7 @@ async function showInvDetail(invoiceId) {
     ['开票日期', inv.issue_date], ['销售方', inv.seller_name],
     ['购买方', inv.buyer_name], ['金额', inv.amount != null ? `¥${inv.amount}` : null],
     ['税额', inv.tax_amount != null ? `¥${inv.tax_amount}` : null],
-    ['价税合计', inv.total_amount != null ? `¥${inv.total_amount}` : null],
+    ['价税合计', formatInvoiceAmountDisplay(inv) || null],
     ['货物/服务', inv.items_description],
     ['备注', inv.remarks],
     ['出发城市', inv.departure_city], ['到达城市', inv.arrival_city],

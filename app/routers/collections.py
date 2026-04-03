@@ -41,6 +41,17 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 logger = logging.getLogger(__name__)
 
 
+def _invoice_effective_total(inv: Invoice) -> float:
+    """价税合计优先；缺失时用金额+税额，与前端看板汇总逻辑一致。"""
+    if inv.total_amount is not None:
+        return float(inv.total_amount)
+    amt = inv.amount
+    tax = inv.tax_amount
+    if amt is not None or tax is not None:
+        return float(amt or 0.0) + float(tax or 0.0)
+    return 0.0
+
+
 async def _exit_if_collection_cancelled(task_id: str, db: AsyncSession) -> bool:
     """若用户已请求取消，回滚当前事务并推送 cancelled 事件。返回 True 时应立即结束归集任务。"""
     if not progress_manager.is_cancelled(task_id):
@@ -505,7 +516,7 @@ async def get_collection_result(db: AsyncSession = Depends(get_db)):
             inv = all_invoices.get(item.invoice_id)
             if not inv:
                 continue
-            total_amount += inv.total_amount or 0.0
+            total_amount += _invoice_effective_total(inv)
             if groupable and item.group_id:
                 groups_dict.setdefault(item.group_id, []).append(inv)
             else:
