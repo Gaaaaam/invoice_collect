@@ -9,6 +9,9 @@ rules:
   - field: remarks
     match_type: contains
     value: 仅供报销使用
+  - field: remarks
+    match_type: contains
+    value: 退票改签
   - field: items_description
     match_type: contains
     value: 报销凭证
@@ -16,8 +19,23 @@ rules:
     match_type: contains
     value: 仅供报销使用
   - field: items_description
+    match_type: contains
+    value: 退票改签
+  - field: items_description
     match_type: regex
-    value: 检票[:：]?\s*\d+[A-Za-z]?
+    value: 检票\s*[:：]
+  condition_logic: OR
+  target_category: travel
+- id: rule_train_physical_seat_class
+  name: 物理火车票座位等级+站名归差旅费
+  priority: 9
+  conditions:
+  - field: items_description
+    match_type: regex
+    value: (二等座|一等座|商务座|特等座|软卧|硬卧|软座|硬座)
+  - field: invoice_type
+    match_type: contains
+    value: 火车票
   condition_logic: OR
   target_category: travel
 - id: rule_1775033948244_0.2186690169075437
