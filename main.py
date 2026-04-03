@@ -9,9 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.database import init_db
+from app.paths import PROJECT_ROOT, UPLOAD_DIR
 from app.routers import collections, config, invoices
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _configure_logging() -> None:
@@ -48,10 +47,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
-app.mount("/uploads", StaticFiles(directory=os.path.join(BASE_DIR, "uploads")), name="uploads")
+app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "static")), name="static")
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+templates = Jinja2Templates(directory=os.path.join(PROJECT_ROOT, "templates"))
 
 app.include_router(invoices.router)
 app.include_router(collections.router)

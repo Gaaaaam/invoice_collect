@@ -1,0 +1,21 @@
+services:
+  invoice-collect:
+    image: ${INVOICE_COLLECT_IMAGE:-invoice-collect:latest}
+    ports:
+      - "8088:8088"
+    volumes:
+      - invoice_data:/data
+    environment:
+      INVOICE_COLLECT_DATA_DIR: /data
+      # 运行时覆盖 config/models.yml 中的 llm / nuextract（不必改镜像内文件）
+      # 值来自同目录 .env（见 .env.example）
+      INVOICE_COLLECT_LLM_BASE_URL: ${INVOICE_COLLECT_LLM_BASE_URL:-}
+      INVOICE_COLLECT_LLM_API_KEY: ${INVOICE_COLLECT_LLM_API_KEY:-}
+      INVOICE_COLLECT_LLM_MODEL: ${INVOICE_COLLECT_LLM_MODEL:-}
+      INVOICE_COLLECT_LLM_TIMEOUT: ${INVOICE_COLLECT_LLM_TIMEOUT:-}
+      INVOICE_COLLECT_NUEXTRACT_HOST: ${INVOICE_COLLECT_NUEXTRACT_HOST:-}
+      INVOICE_COLLECT_NUEXTRACT_PORT: ${INVOICE_COLLECT_NUEXTRACT_PORT:-}
+      INVOICE_COLLECT_NUEXTRACT_TIMEOUT: ${INVOICE_COLLECT_NUEXTRACT_TIMEOUT:-}
+
+volumes:
+  invoice_data:

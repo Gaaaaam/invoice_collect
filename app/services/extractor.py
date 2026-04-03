@@ -26,16 +26,15 @@ import json
 import os
 import re
 import sys
-import yaml
 from typing import Any, Optional
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, BASE_DIR)
 
 from nuextract import NuExtractClient  # noqa: E402
+from app.models_runtime import load_models_config  # noqa: E402
 from app.services.station_city_map import normalize_transport_city  # noqa: E402
 
-MODELS_CONFIG_PATH = os.path.join(BASE_DIR, "config", "models.yml")
 NUEXTRACT_TEMPLATES_JSON_PATH = os.path.join(BASE_DIR, "config", "nuextract_templates.json")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,11 +377,6 @@ def _extract_nuextract_payload(raw: Any) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # 工具函数
 # ─────────────────────────────────────────────────────────────────────────────
-
-def load_models_config() -> dict:
-    with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
 
 def load_nuextract_config() -> dict:
     return load_models_config().get("nuextract", {})

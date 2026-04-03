@@ -1,14 +1,14 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-import os
 import logging
 
 from sqlalchemy import text
 
+from app.paths import DATABASE_FILE
+
 logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATABASE_URL = f"sqlite+aiosqlite:///{os.path.join(BASE_DIR, 'invoice_collect.db')}"
+DATABASE_URL = f"sqlite+aiosqlite:///{DATABASE_FILE}"
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

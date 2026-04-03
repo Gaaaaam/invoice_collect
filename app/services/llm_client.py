@@ -1,20 +1,15 @@
 import json
 import logging
-import os
-import yaml
 from typing import Any, Optional
 from openai import AsyncOpenAI
 
-logger = logging.getLogger(__name__)
+from app.models_runtime import load_models_config
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MODELS_CONFIG_PATH = os.path.join(BASE_DIR, "config", "models.yml")
+logger = logging.getLogger(__name__)
 
 
 def load_llm_config() -> dict:
-    with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    return config.get("llm", {})
+    return load_models_config().get("llm") or {}
 
 
 class LLMClient:

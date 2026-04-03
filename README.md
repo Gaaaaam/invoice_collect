@@ -44,6 +44,7 @@ A full-stack web app for uploading invoices, extracting structured fields (via a
 | `requirements.txt` | Runtime dependencies (API + default OCR fallback stack) |
 | `templates/`, `static/` | Web UI |
 | `uploads/` | Stored upload files |
+| `Dockerfile`, `docker-compose.yml` | Container image and one-command local stack |
 
 ### Configuration
 
@@ -63,6 +64,18 @@ Do not commit real API keys; use placeholders in shared repos.
 | Variable | Meaning |
 |----------|---------|
 | `INVOICE_COLLECT_LOG_LEVEL` | Python log level, default `INFO`. Use `DEBUG` for per-invoice details and raw LLM snippets. |
+| `INVOICE_COLLECT_DATA_DIR` | Optional. Directory for `invoice_collect.db` and the `uploads/` subtree. Defaults to the project root (same layout as a local clone). Set to e.g. `/data` in Docker and mount a volume there. |
+| `INVOICE_COLLECT_HOST` | Bind address for Uvicorn (Docker image default `0.0.0.0`). |
+| `INVOICE_COLLECT_PORT` | Listen port (Docker image default `8088`). |
+| `INVOICE_COLLECT_LLM_BASE_URL` | Optional. Runtime override for `llm.base_url` in `config/models.yml`. |
+| `INVOICE_COLLECT_LLM_API_KEY` | Optional. Runtime override for `llm.api_key`. |
+| `INVOICE_COLLECT_LLM_MODEL` | Optional. Runtime override for `llm.model`. |
+| `INVOICE_COLLECT_LLM_TIMEOUT` | Optional. Runtime override for `llm.timeout` (seconds, integer). |
+| `INVOICE_COLLECT_NUEXTRACT_HOST` | Optional. Runtime override for `nuextract.host`. |
+| `INVOICE_COLLECT_NUEXTRACT_PORT` | Optional. Runtime override for `nuextract.port`. |
+| `INVOICE_COLLECT_NUEXTRACT_TIMEOUT` | Optional. Runtime override for `nuextract.timeout` (seconds, integer). |
+
+**`models.yml` vs env:** Classification, NuExtract calls, and extraction routing read a **merged** view: load `config/models.yml`, then apply any of the `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*` variables above (env wins when set). The web/API editor `GET /api/config/models` still reflects the **file on disk** only; use env for secrets in Compose/Kubernetes without baking keys into the image.
 
 ### Install and run
 
@@ -82,6 +95,48 @@ uvicorn main:app --host 127.0.0.1 --port 8088
 
 Open `http://127.0.0.1:8088/`. Interactive API docs: `http://127.0.0.1:8088/docs`.
 
+### Docker
+
+Prerequisites: [Docker](https://docs.docker.com/get-docker/) (and optionally Docker Compose).
+
+When you distribute a ready-made image, deployers only need to pull and run it.
+
+```bash
+docker pull kyriegan1007/invoice-collect:1.0.0
+```
+
+Then run (persist DB/uploads on a named volume; map host port `8088`):
+
+```bash
+docker run -d --name invoice-collect -p 8088:8088 \
+  -v invoice_collect_data:/data \
+  -e INVOICE_COLLECT_DATA_DIR=/data \
+  kyriegan1007/invoice-collect:1.0.0
+```
+
+Then open `http://localhost:8088/`. The app stores `invoice_collect.db` and uploaded files under `/data` inside the container when `INVOICE_COLLECT_DATA_DIR=/data`.
+
+The image includes `config/models.yml` (often placeholders). **LLM and NuExtract are not bundled:** point them at real services via **environment variables** (see table above), a **bind-mounted** `config/`, or **in-app** settings (`PUT /api/config/models` writes the file inside the container). If NuExtract is unavailable, set `extraction.provider` to `ocr_fallback` (or keep `auto`) so local OCR can still extract text; LLM remains optional when rules cover your cases.
+
+**Compose** (`docker-compose.yml` defaults to image mode and reads `.env`):
+
+```bash
+docker compose up -d
+```
+
+Create `.env` from `.env.example` and set at least:
+- `INVOICE_COLLECT_IMAGE=kyriegan1007/invoice-collect:1.0.0`
+- `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*` as needed (non-empty values override `models.yml` at runtime)
+
+NuExtract / LLM endpoints in `models.yml` (or env overrides) must be reachable from the container (use `host.docker.internal` on Docker Desktop if the service runs on the host, or a LAN URL). To override config without rebuilding, bind-mount `config`:
+
+```bash
+docker run -d -p 8088:8088 -v invoice_collect_data:/data -e INVOICE_COLLECT_DATA_DIR=/data \
+  -v "$(pwd)/config:/app/config:ro" kyriegan1007/invoice-collect:1.0.0
+```
+
+(On Windows PowerShell, replace `$(pwd)` with `${PWD}` or an absolute path.)
+
 ### Collection flow and main APIs
 
 1. Upload: `POST /api/invoices/upload` → extraction runs → `extract_status=done` on success, `error` if both NuExtract and OCR fallback fail. `POST /api/invoices/{id}/re-extract` to retry one invoice.
@@ -98,7 +153,7 @@ On `INFO`, logs include: collection task options and summaries; per-invoice clas
 
 ### Deployment notes
 
-- Persist both `invoice_collect.db` and `uploads/` via volume mounts; SQLite is not designed for multi-instance writes.
+- For Docker, use a volume on `INVOICE_COLLECT_DATA_DIR` (see **Docker** above). Otherwise persist `invoice_collect.db` and `uploads/` via mounts; SQLite is not designed for multi-instance writes.
 - Ensure the app host can reach the NuExtract endpoint configured in `models.yml` (client uses `/api/v1/nuextract/`).
 - For production, disable reload and run behind a process manager with explicit host/port, CORS policy, and secret injection.
 - Keep real keys out of VCS; use placeholders in config files and inject secrets during deployment.
@@ -146,6 +201,7 @@ On `INFO`, logs include: collection task options and summaries; per-invoice clas
 | `requirements.txt` | 运行依赖（含默认 OCR 保底栈） |
 | `templates/`、`static/` | 网页界面 |
 | `uploads/` | 上传文件存储 |
+| `Dockerfile`、`docker-compose.yml` | 容器镜像与一键启动 |
 
 ### 配置说明
 
@@ -161,6 +217,18 @@ On `INFO`, logs include: collection task options and summaries; per-invoice clas
 | 变量 | 说明 |
 |------|------|
 | `INVOICE_COLLECT_LOG_LEVEL` | 日志级别，默认 `INFO`；设为 `DEBUG` 可查看单张发票上下文、LLM 原始片段等 |
+| `INVOICE_COLLECT_DATA_DIR` | 可选。存放 `invoice_collect.db` 与 `uploads/` 的目录；默认与源码根目录一致。Docker 中常设为 `/data` 并挂载数据卷。 |
+| `INVOICE_COLLECT_HOST` | Uvicorn 监听地址（镜像内默认 `0.0.0.0`）。 |
+| `INVOICE_COLLECT_PORT` | 监听端口（镜像内默认 `8088`）。 |
+| `INVOICE_COLLECT_LLM_BASE_URL` | 可选。运行时覆盖 `config/models.yml` 中的 `llm.base_url`。 |
+| `INVOICE_COLLECT_LLM_API_KEY` | 可选。运行时覆盖 `llm.api_key`。 |
+| `INVOICE_COLLECT_LLM_MODEL` | 可选。运行时覆盖 `llm.model`。 |
+| `INVOICE_COLLECT_LLM_TIMEOUT` | 可选。运行时覆盖 `llm.timeout`（秒，整数）。 |
+| `INVOICE_COLLECT_NUEXTRACT_HOST` | 可选。运行时覆盖 `nuextract.host`。 |
+| `INVOICE_COLLECT_NUEXTRACT_PORT` | 可选。运行时覆盖 `nuextract.port`。 |
+| `INVOICE_COLLECT_NUEXTRACT_TIMEOUT` | 可选。运行时覆盖 `nuextract.timeout`（秒，整数）。 |
+
+**`models.yml` 与环境变量：** 抽取与分类在运行时会读取「磁盘上的 `config/models.yml` + 上述 `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*` 环境变量」的合并结果（**环境变量优先**）。`GET /api/config/models` 仍只反映**磁盘文件**（界面保存的内容），便于不把密钥写进仓库时用 Compose/K8s 注入真实值。
 
 ### 安装与运行
 
@@ -180,6 +248,45 @@ uvicorn main:app --host 127.0.0.1 --port 8088
 
 浏览器访问 `http://127.0.0.1:8088/`；接口文档：`http://127.0.0.1:8088/docs`。
 
+### Docker（容器部署）
+
+需已安装 [Docker](https://docs.docker.com/get-docker/)（可选 Docker Compose）。
+
+如果你是把现成镜像交付给部署方，部署方只需要拉取并运行，无需再本地构建。
+
+```bash
+docker pull kyriegan1007/invoice-collect:1.0.0
+```
+
+**运行**（命名卷持久化数据库与上传文件，宿主机端口 8088；整段可复制为一行）：
+
+```bash
+docker run -d --name invoice-collect -p 8088:8088 -v invoice_collect_data:/data -e INVOICE_COLLECT_DATA_DIR=/data kyriegan1007/invoice-collect:1.0.0
+```
+
+浏览器访问 `http://localhost:8088/`。设置 `INVOICE_COLLECT_DATA_DIR=/data` 时，容器内数据库与上传目录均在 `/data` 下。
+
+镜像内带有 `config/models.yml`（多为占位符）。**镜像不包含 LLM 与 NuExtract 服务**，需通过**环境变量**（见上文环境变量表）、**挂载本机 `config/`**，或在界面里保存 **`PUT /api/config/models`**（写入容器内文件）指向真实地址。若无 NuExtract，可将 `extraction.provider` 设为 `ocr_fallback`（或保持 `auto`）以走本地 OCR；若规则已能覆盖分类场景，对 LLM 的依赖也会降低。
+
+**Compose**（`docker-compose.yml` 已按镜像部署设计，并默认读取同目录 `.env`）：
+
+```bash
+docker compose up -d
+```
+
+可复制 `.env.example` 为 `.env`，至少配置：
+- `INVOICE_COLLECT_IMAGE=kyriegan1007/invoice-collect:1.0.0`
+- 按需配置 `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*`（非空值会在运行时覆盖 `models.yml`）
+
+容器内需能访问 `config/models.yml` 里配置的 NuExtract / LLM 地址（服务在宿主机上时，Docker Desktop 可用 `host.docker.internal`）。不重建镜像即可换配置时，可把本机 `config` 挂载进容器，例如：
+
+```bash
+docker run -d -p 8088:8088 -v invoice_collect_data:/data -e INVOICE_COLLECT_DATA_DIR=/data \
+  -v F:/项目存档/invoice_collect/config:/app/config:ro kyriegan1007/invoice-collect:1.0.0
+```
+
+（路径按你的机器修改；`:ro` 表示只读，若要在界面里改配置可去掉 `:ro`。）
+
 ### 归集流程与主要 API
 
 1. **上传**：`POST /api/invoices/upload` → 抽取完成后 `extract_status=done`；远程与本地均失败则为 `error`。单张重抽：`POST /api/invoices/{invoice_id}/re-extract`。
@@ -196,7 +303,7 @@ uvicorn main:app --host 127.0.0.1 --port 8088
 
 ### 部署注意事项
 
-- `invoice_collect.db` 与 `uploads/` 需做持久化挂载；SQLite 不适合多实例并发写入。
+- 使用 Docker 时给 `INVOICE_COLLECT_DATA_DIR` 挂数据卷（见上文 **Docker**）。否则请将 `invoice_collect.db` 与 `uploads/` 持久化挂载；SQLite 不适合多实例并发写入。
 - 需确保应用节点可访问 `models.yml` 中配置的 NuExtract 服务（客户端路径为 `/api/v1/nuextract/`）。
 - 生产环境应关闭热重载，使用进程管理启动，并按需收紧 CORS、注入密钥。
 - `models.yml` 中密钥请使用占位符，真实值通过环境/密钥服务注入，避免入库与泄露。
