@@ -241,6 +241,7 @@ async def re_extract_invoice(invoice_id: int, db: AsyncSession = Depends(get_db)
         raise
     except Exception as e:
         invoice.extract_status = "error"
+        await db.commit()
         raise HTTPException(status_code=500, detail=f"抽取失败：{e}")
 
     await db.commit()
