@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="appTitle">发票归集系统</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260403a" />
+  <link rel="stylesheet" href="/static/css/style.css?v=20260403b" />
 </head>
 <body>
 
@@ -154,9 +154,13 @@
       </div>
       <div class="progress-step" data-upload-step="1">
         <div class="step-dot"></div>
-        <div class="step-label" data-i18n="uploadStepExtract">识别与抽取</div>
+        <div class="step-label" data-i18n="uploadStepClassify">判别类型</div>
       </div>
       <div class="progress-step" data-upload-step="2">
+        <div class="step-dot"></div>
+        <div class="step-label" data-i18n="uploadStepExtract">识别与抽取</div>
+      </div>
+      <div class="progress-step" data-upload-step="3">
         <div class="step-dot"></div>
         <div class="step-label" data-i18n="uploadStepFinish">完成</div>
       </div>
@@ -282,7 +286,7 @@
 
 <!-- ─── Config Modal ───────────────────────────────────────────────────────── -->
 <div class="modal-overlay hidden" id="configModal">
-  <div class="modal" style="max-width:700px">
+  <div class="modal modal--config">
     <div class="modal-header">
       <span style="font-size:20px">⚙️</span>
       <div class="modal-title">系统配置</div>
@@ -292,6 +296,7 @@
       <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('tabCategories')">费用大类</button>
         <button class="tab-btn" onclick="switchTab('tabRules')">分类规则</button>
+        <button class="tab-btn" onclick="switchTab('tabTravel')">差旅设置</button>
         <button class="tab-btn" onclick="switchTab('tabModels')">模型服务</button>
       </div>
 
@@ -305,6 +310,20 @@
       <div class="tab-pane" id="tabRules">
         <div id="ruleList"></div>
         <button class="add-rule-btn" onclick="addRule()">＋ 添加规则</button>
+      </div>
+
+      <!-- 差旅设置 -->
+      <div class="tab-pane" id="tabTravel">
+        <div class="fw-600 mb-8">差旅闭环设置</div>
+        <div class="form-group">
+          <label class="form-label">我所在的城市</label>
+          <input class="form-input" id="travelHomeCity" placeholder="上海" style="max-width:200px" />
+          <div style="margin-top:6px;font-size:12px;color:#6b7280;line-height:1.6">
+            出差闭环的判定参照城市。系统会优先以此城市出发的票作为行程起点，<br>
+            准确识别"从此城市出发、途经其他城市、最终回到此城市"的完整闭环行程。<br>
+            一个城市可以有多个机场和火车站，例如北京的首都机场与大兴机场均视为"北京"。
+          </div>
+        </div>
       </div>
 
       <!-- 模型服务 -->
@@ -378,6 +397,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="/static/js/app.js?v=20260402f"></script>
+<script src="/static/js/app.js?v=20260403b"></script>
 </body>
 </html>

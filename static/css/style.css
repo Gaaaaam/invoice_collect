@@ -714,6 +714,26 @@ body {
   gap: 8px;
 }
 
+/* 系统配置：固定外框高度，与费用大类/分类规则页一致；内容区滚动，不随短 Tab 收缩 */
+#configModal.modal-overlay {
+  display: grid;
+  place-items: center;
+  align-content: center;
+}
+#configModal .modal.modal--config {
+  box-sizing: border-box;
+  max-width: 700px;
+  width: min(700px, calc(100vw - 40px));
+  /* 与长列表 Tab 视觉一致；短 Tab 时底部留白，由 body 内滚动长内容 */
+  --config-modal-h: min(620px, calc(100vh - 40px));
+  height: var(--config-modal-h);
+  min-height: var(--config-modal-h);
+  max-height: calc(100vh - 40px);
+}
+#configModal .modal.modal--config .modal-body {
+  min-height: 0;
+}
+
 /* ─── Tabs ──────────────────────────────────────────────────────────────────── */
 .tabs {
   display: flex;

@@ -88,10 +88,11 @@ const I18N = {
     methodLLM: '大模型（LLM）', methodLLMHint: '当内容分析和规则均未命中时使用',
     forceReclassify: '强制重新分类', forceReclassifyHint: '对已分类的发票也重新执行',
     statusDone: '已抽取', statusPending: '待抽取', statusError: '抽取失败',
-    loadingProcessing: '处理中...', loadingUploadExtract: '上传并抽取发票信息...',
+    loadingProcessing: '处理中...',     loadingUploadExtract: '上传并抽取发票信息...',
     uploadProgressTitle: '正在上传并处理发票…', uploadSendingHint: '正在上传 {count} 个文件…',
+    uploadClassifyHint: '正在判别发票类型，请稍候…',
     uploadExtractHint: '正在识别票面并抽取字段，请稍候…', uploadDoneTitle: '处理完成',
-    uploadStepSend: '上传文件', uploadStepExtract: '识别与抽取', uploadStepFinish: '完成',
+    uploadStepSend: '上传文件', uploadStepClassify: '判别类型', uploadStepExtract: '识别与抽取', uploadStepFinish: '完成',
     progressStepPrepare: '准备中', progressStepClassify: '发票分类', progressStepGroup: '分组',
     progressStepSave: '保存结果', progressStepDone: '归集完成',
     btnProgressCancel: '取消', progressCancelling: '取消中…',
@@ -140,10 +141,11 @@ const I18N = {
     methodLLM: 'LLM', methodLLMHint: 'Fallback when analysis/rules do not match',
     forceReclassify: 'Force Reclassify', forceReclassifyHint: 'Reclassify already-classified invoices',
     statusDone: 'Extracted', statusPending: 'Pending', statusError: 'Failed',
-    loadingProcessing: 'Processing...', loadingUploadExtract: 'Uploading and extracting invoice data...',
+    loadingProcessing: 'Processing...',     loadingUploadExtract: 'Uploading and extracting invoice data...',
     uploadProgressTitle: 'Uploading and processing…', uploadSendingHint: 'Uploading {count} file(s)…',
+    uploadClassifyHint: 'Classifying invoice type, please wait…',
     uploadExtractHint: 'Extracting fields on server, please wait…', uploadDoneTitle: 'Done',
-    uploadStepSend: 'Upload', uploadStepExtract: 'Extract', uploadStepFinish: 'Done',
+    uploadStepSend: 'Upload', uploadStepClassify: 'Classify Type', uploadStepExtract: 'Extract', uploadStepFinish: 'Done',
     progressStepPrepare: 'Preparing', progressStepClassify: 'Classification', progressStepGroup: 'Grouping',
     progressStepSave: 'Saving', progressStepDone: 'Complete',
     btnProgressCancel: 'Cancel', progressCancelling: 'Cancelling…',
@@ -220,6 +222,30 @@ function invoiceIcon(type) {
 }
 
 // ─── API Helper ───────────────────────────────────────────────────────────────
+function formatApiErrorMessage(err, fallbackText) {
+  if (!err) return fallbackText || t('requestFailed');
+  const detail = err.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map(item => {
+      if (!item) return '';
+      if (typeof item === 'string') return item;
+      if (typeof item.msg === 'string') {
+        const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+        return loc ? `${loc}: ${item.msg}` : item.msg;
+      }
+      return '';
+    }).filter(Boolean);
+    if (parts.length) return parts.join('；');
+  }
+  if (detail && typeof detail === 'object') {
+    if (typeof detail.msg === 'string') return detail.msg;
+    return JSON.stringify(detail);
+  }
+  if (typeof err.message === 'string' && err.message.trim()) return err.message;
+  return fallbackText || t('requestFailed');
+}
+
 async function api(method, path, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
@@ -229,7 +255,7 @@ async function api(method, path, body) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || t('requestFailed'));
+    throw new Error(formatApiErrorMessage(err, res.statusText));
   }
   return res.json();
 }
@@ -255,7 +281,8 @@ function resetUploadOverlaySteps() {
 }
 
 /**
- * @param {'upload'|'extract'|'done'|'error_upload'|'error_extract'} phase
+ * @param {'upload'|'classify'|'extract'|'done'|'error_upload'|'error_classify'|'error_extract'} phase
+ * 步骤索引：0=上传文件, 1=判别类型, 2=识别与抽取, 3=完成
  */
 function setUploadOverlayPhase(phase, detail = '') {
   const steps = document.querySelectorAll('#uploadProgressSteps .progress-step');
@@ -265,16 +292,22 @@ function setUploadOverlayPhase(phase, detail = '') {
     el.classList.remove('active', 'done', 'error');
     if (phase === 'upload') {
       if (i === 0) el.classList.add('active');
-    } else if (phase === 'extract') {
+    } else if (phase === 'classify') {
       if (i === 0) el.classList.add('done');
       if (i === 1) el.classList.add('active');
+    } else if (phase === 'extract') {
+      if (i <= 1) el.classList.add('done');
+      if (i === 2) el.classList.add('active');
     } else if (phase === 'done') {
       el.classList.add('done');
     } else if (phase === 'error_upload') {
       if (i === 0) el.classList.add('error');
-    } else if (phase === 'error_extract') {
+    } else if (phase === 'error_classify') {
       if (i === 0) el.classList.add('done');
       if (i === 1) el.classList.add('error');
+    } else if (phase === 'error_extract') {
+      if (i <= 1) el.classList.add('done');
+      if (i === 2) el.classList.add('error');
     }
   });
 }
@@ -292,18 +325,30 @@ function hideUploadOverlay() {
   if (detailEl) detailEl.textContent = '';
 }
 
-/** 使用 XHR 以便在上传完成后切换到「抽取」节点 */
+/**
+ * 使用 XHR 上传，并在上传完成后依次展示「判别类型」→「识别与抽取」两个阶段节点。
+ * 服务端双阶段流程：Step1 分类（约2-5s）→ Step2 抽取（约3-6s）。
+ * 此处用 1500ms 延迟在 UI 上区分两个阶段，直观呈现处理进度。
+ */
 function uploadInvoicesXHR(formData) {
   return new Promise((resolve, reject) => {
     let bodySent = false;
+    let classifyTimer = null;
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/invoices/upload');
     xhr.responseType = 'json';
     xhr.upload.onload = () => {
       bodySent = true;
-      setUploadOverlayPhase('extract', t('uploadExtractHint'));
+      // 文件体已发送，服务端开始处理：先展示「判别类型」阶段
+      setUploadOverlayPhase('classify', t('uploadClassifyHint'));
+      // 约 1.5 秒后切换到「识别与抽取」阶段
+      classifyTimer = setTimeout(() => {
+        setUploadOverlayPhase('extract', t('uploadExtractHint'));
+        classifyTimer = null;
+      }, 1500);
     };
     xhr.onload = () => {
+      if (classifyTimer) { clearTimeout(classifyTimer); classifyTimer = null; }
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(xhr.response);
         return;
@@ -318,6 +363,7 @@ function uploadInvoicesXHR(formData) {
       reject(Object.assign(new Error(msg), { _phase: bodySent ? 'extract' : 'upload' }));
     };
     xhr.onerror = () => {
+      if (classifyTimer) { clearTimeout(classifyTimer); classifyTimer = null; }
       reject(Object.assign(new Error(t('requestFailed')), { _phase: bodySent ? 'extract' : 'upload' }));
     };
     xhr.send(formData);
@@ -343,11 +389,16 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 
 // ─── Tab ──────────────────────────────────────────────────────────────────────
 function switchTab(activeId) {
-  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById(activeId).classList.add('active');
-  const idx = ['tabCategories','tabRules','tabModels'].indexOf(activeId);
-  document.querySelectorAll('.tab-btn')[idx]?.classList.add('active');
+  const modal = document.getElementById('configModal');
+  if (!modal) return;
+  const order = ['tabCategories', 'tabRules', 'tabTravel', 'tabModels'];
+  modal.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  modal.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  const pane = document.getElementById(activeId);
+  if (pane) pane.classList.add('active');
+  const idx = order.indexOf(activeId);
+  const buttons = modal.querySelectorAll('.tab-btn');
+  if (idx >= 0 && buttons[idx]) buttons[idx].classList.add('active');
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
@@ -380,8 +431,10 @@ async function handleFiles(files) {
     await loadInvoices();
     await new Promise(r => setTimeout(r, 400));
   } catch (e) {
-    const phase = e && e._phase === 'upload' ? 'error_upload' : 'error_extract';
-    setUploadOverlayPhase(phase, String(e.message || e));
+    let errPhase = 'error_extract';
+    if (e && e._phase === 'upload') errPhase = 'error_upload';
+    else if (e && e._phase === 'classify') errPhase = 'error_classify';
+    setUploadOverlayPhase(errPhase, String(e.message || e));
     toast(t('uploadFailed', { error: e.message || e }), 'error');
     await new Promise(r => setTimeout(r, 600));
   } finally {
@@ -1673,38 +1726,42 @@ async function confirmCreateGroup() {
 let _currentDetailInvoice = null; // 暂存当前详情发票对象
 
 async function showInvDetail(invoiceId) {
-  const inv = await api('GET', `/api/invoices/${invoiceId}`);
-  _currentDetailInvoice = inv;
+  try {
+    const inv = await api('GET', `/api/invoices/${invoiceId}`);
+    _currentDetailInvoice = inv;
 
-  const fields = [
-    ['发票类型', inv.invoice_type], ['发票号码', inv.invoice_number],
-    ['开票日期', inv.issue_date], ['销售方', inv.seller_name],
-    ['购买方', inv.buyer_name], ['金额', inv.amount != null ? `¥${inv.amount}` : null],
-    ['税额', inv.tax_amount != null ? `¥${inv.tax_amount}` : null],
-    ['价税合计', formatInvoiceAmountDisplay(inv) || null],
-    ['货物/服务', inv.items_description],
-    ['备注', inv.remarks],
-    ['出发城市', inv.departure_city], ['到达城市', inv.arrival_city],
-    ['出发时间', inv.departure_time], ['到达时间', inv.arrival_time],
-    ['文件名', inv.filename], ['抽取状态', statusLabel(inv.extract_status)],
-  ];
+    const fields = [
+      ['发票类型', inv.invoice_type], ['发票号码', inv.invoice_number],
+      ['开票日期', inv.issue_date], ['销售方', inv.seller_name],
+      ['购买方', inv.buyer_name], ['金额', inv.amount != null ? `¥${inv.amount}` : null],
+      ['税额', inv.tax_amount != null ? `¥${inv.tax_amount}` : null],
+      ['价税合计', formatInvoiceAmountDisplay(inv) || null],
+      ['货物/服务', inv.items_description],
+      ['备注', inv.remarks],
+      ['出发城市', inv.departure_city], ['到达城市', inv.arrival_city],
+      ['出发时间', inv.departure_time], ['到达时间', inv.arrival_time],
+      ['文件名', inv.filename], ['抽取状态', statusLabel(inv.extract_status)],
+    ];
 
-  document.getElementById('detailModalBody').innerHTML = `
-    <div style="display:flex;gap:12px;margin-bottom:14px;align-items:flex-start">
-      <div style="font-size:40px;line-height:1">${invoiceIcon(inv.invoice_type)}</div>
-      <div>
-        <div style="font-size:16px;font-weight:600">${escHtml(inv.invoice_type || '未知类型')}</div>
-        <div class="text-muted" style="font-size:12px;margin-top:3px">${escHtml(inv.filename)}</div>
+    document.getElementById('detailModalBody').innerHTML = `
+      <div style="display:flex;gap:12px;margin-bottom:14px;align-items:flex-start">
+        <div style="font-size:40px;line-height:1">${invoiceIcon(inv.invoice_type)}</div>
+        <div>
+          <div style="font-size:16px;font-weight:600">${escHtml(inv.invoice_type || '未知类型')}</div>
+          <div class="text-muted" style="font-size:12px;margin-top:3px">${escHtml(inv.filename)}</div>
+        </div>
       </div>
-    </div>
-    <hr class="divider" />
-    ${fields.filter(([, v]) => v != null && v !== '').map(([k, v]) => `
-      <div class="detail-row">
-        <div class="detail-label">${k}</div>
-        <div class="detail-value">${escHtml(String(v))}</div>
-      </div>`).join('')}
-  `;
-  openModal('detailModal');
+      <hr class="divider" />
+      ${fields.filter(([, v]) => v != null && v !== '').map(([k, v]) => `
+        <div class="detail-row">
+          <div class="detail-label">${k}</div>
+          <div class="detail-value">${escHtml(String(v))}</div>
+        </div>`).join('')}
+    `;
+    openModal('detailModal');
+  } catch (e) {
+    toast(`加载详情失败：${e.message || e}`, 'error');
+  }
 }
 
 // ─── Invoice Preview ──────────────────────────────────────────────────────────
@@ -1770,18 +1827,21 @@ document.getElementById('btnConfig').addEventListener('click', async () => {
 });
 
 async function loadConfigData() {
-  const [cats, rules, models] = await Promise.all([
+  const [cats, rules, travel, models] = await Promise.all([
     api('GET', '/api/config/categories'),
     api('GET', '/api/config/rules'),
+    api('GET', '/api/config/travel'),
     api('GET', '/api/config/models'),
   ]);
 
   state.categories = cats.categories;
   state.rules = rules.rules;
+  state.travelConfig = travel;
   state.modelsConfig = models;
 
   renderCategoryEditor(cats.categories);
   renderRuleEditor(rules.rules);
+  renderTravelEditor(travel);
   renderModelsEditor(models);
 }
 
@@ -1932,6 +1992,11 @@ function collectRules() {
   });
 }
 
+// ── Travel Editor ─────────────────────────────────────────────────────────────
+function renderTravelEditor(travel) {
+  document.getElementById('travelHomeCity').value = travel?.home_city || '上海';
+}
+
 // ── Models Editor ─────────────────────────────────────────────────────────────
 function renderModelsEditor(models) {
   document.getElementById('llmBaseUrl').value = models.llm?.base_url || '';
@@ -1941,6 +2006,20 @@ function renderModelsEditor(models) {
   document.getElementById('nuHost').value = models.nuextract?.host || '';
   document.getElementById('nuPort').value = models.nuextract?.port || '';
   document.getElementById('nuTimeout').value = models.nuextract?.timeout || 60;
+}
+
+function normalizeExtractionConfig(extraction) {
+  const src = extraction || {};
+  const ocr = src.ocr || {};
+  return {
+    provider: src.provider || 'auto',
+    use_llm_on_fallback: Boolean(src.use_llm_on_fallback),
+    ocr: {
+      engine: ocr.engine || 'rapidocr_onnx',
+      pdf_max_pages: parseInt(ocr.pdf_max_pages) || 3,
+      min_text_chars: parseInt(ocr.min_text_chars) || 80,
+    },
+  };
 }
 
 async function saveConfig() {
@@ -1954,6 +2033,11 @@ async function saveConfig() {
       const rules = collectRules();
       await api('PUT', '/api/config/rules', { rules });
       toast('分类规则已保存', 'success');
+    } else if (activeTab === 'tabTravel') {
+      const homeCity = document.getElementById('travelHomeCity').value.trim() || '上海';
+      await api('PUT', '/api/config/travel', { home_city: homeCity });
+      state.travelConfig = { home_city: homeCity };
+      toast('差旅设置已保存', 'success');
     } else if (activeTab === 'tabModels') {
       const models = {
         llm: {
@@ -1967,8 +2051,11 @@ async function saveConfig() {
           port: parseInt(document.getElementById('nuPort').value),
           timeout: parseInt(document.getElementById('nuTimeout').value),
         },
+        // 保留 extraction，避免模型配置保存时误删 YAML 中该段
+        extraction: normalizeExtractionConfig(state.modelsConfig?.extraction),
       };
       await api('PUT', '/api/config/models', models);
+      state.modelsConfig = models;
       toast('模型服务配置已保存并生效', 'success');
     }
   } catch (e) {
