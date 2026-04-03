@@ -36,6 +36,17 @@ from app.services.progress import ProgressEvent, progress_manager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CATEGORIES_CONFIG_PATH = os.path.join(BASE_DIR, "config", "categories.yml")
+TRAVEL_CONFIG_PATH = os.path.join(BASE_DIR, "config", "travel.yml")
+
+
+def _load_home_city() -> str:
+    """读取差旅设置中的所在城市，读取失败时返回默认值"上海"。"""
+    try:
+        with open(TRAVEL_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return str(data.get("home_city") or "上海").strip() or "上海"
+    except Exception:
+        return "上海"
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 logger = logging.getLogger(__name__)
@@ -302,7 +313,8 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
 
             if travel_invoices:
                 travel_dicts = [_invoice_to_dict(inv) for inv in travel_invoices]
-                loops = detect_travel_loops(travel_dicts)
+                home_city = _load_home_city()
+                loops = detect_travel_loops(travel_dicts, home_city=home_city)
 
                 # 仅解除「本次参与差旅分组」的发票与旧组的关联，避免误伤未参与归集的发票（如历史归档）
                 travel_ids_to_regroup = {inv.id for inv in travel_invoices}

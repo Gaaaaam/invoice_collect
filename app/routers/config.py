@@ -7,6 +7,7 @@ from app.schemas import (
     MessageResponse,
     ModelsConfig,
     RulesConfig,
+    TravelConfig,
 )
 from app.services.llm_client import reset_llm_client
 from app.services.extractor import reset_extractor
@@ -96,7 +97,28 @@ async def get_models_config():
 async def update_models_config(config: ModelsConfig):
     """更新模型服务配置，并重置客户端实例"""
     data = config.model_dump()
-    _write_yaml("models.yml", data)
+    existing = _read_yaml("models.yml")
+    merged = {**(existing if isinstance(existing, dict) else {}), **data}
+    _write_yaml("models.yml", merged)
     reset_llm_client()
     reset_extractor()
     return MessageResponse(message="模型服务配置已保存并生效")
+
+
+# ─── 差旅费设置 ────────────────────────────────────────────────────────────────
+
+@router.get("/travel", response_model=TravelConfig)
+async def get_travel_config():
+    """读取差旅费归集设置（所在城市等）"""
+    try:
+        data = _read_yaml("travel.yml")
+        return TravelConfig.model_validate(data)
+    except FileNotFoundError:
+        return TravelConfig()
+
+
+@router.put("/travel", response_model=MessageResponse)
+async def update_travel_config(config: TravelConfig):
+    """更新差旅费归集设置"""
+    _write_yaml("travel.yml", config.model_dump())
+    return MessageResponse(message="差旅费设置已保存")
