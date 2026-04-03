@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import re
 import tempfile
 from typing import Any, Callable, Optional
 
 from app.services.extractor import _normalize_result, detect_invoice_type
+
+logger = logging.getLogger(__name__)
 
 _RE_TRAIN_NO = re.compile(r"\b([GDCKTZgdcktz]\d{2,5})\b")
 _RE_FLIGHT_NO = re.compile(r"\b([A-Z]{2}\d{3,4})\b")
@@ -34,9 +37,104 @@ _RE_BUYER_NAME = re.compile(
     re.I,
 )
 _RE_REMARKS = re.compile(r"备\s*注\s*[：:]\s*(.+?)(?=\n\s*\n|\n[A-Z\u4e00-\u9fa5]{1,3}\s*[：:]|\Z)", re.S)
+
+# 站名-箭头/连字符-站名（电子票/通用）
 _RE_STATION_PAIR = re.compile(
     r"([\u4e00-\u9fa5]{2,12}站)\s*[→\-—至到]\s*([\u4e00-\u9fa5]{2,12}站)"
 )
+# 物理火车票版式：出发站 车次 到达站（同行或相邻行）
+_RE_STATION_PAIR_PHYSICAL = re.compile(
+    r"([\u4e00-\u9fa5]{2,10}站)\s+[GDCKTZgdcktz]\d{2,5}\s+([\u4e00-\u9fa5]{2,10}站)",
+    re.I,
+)
+# 独立站名（用于备用提取）
+_RE_STATION_SINGLE = re.compile(r"([\u4e00-\u9fa5]{2,10}站)")
+
+# 物理火车票：发车日期+时间+开，如 "2024年08月25日14:02开"
+_RE_TRAIN_DEPART_DT = re.compile(
+    r"(\d{4}年\d{1,2}月\d{1,2}日)\s*(\d{1,2}:\d{2})\s*开"
+)
+# 金额：¥314.0元 或 ￥314.0元
+_RE_TRAIN_AMOUNT_YUAN = re.compile(r"[¥￥]\s*([\d,，\.]+\.?\d*)\s*元")
+# 座位等级
+_RE_SEAT_CLASS = re.compile(r"(二等座|一等座|商务座|特等座|软卧|硬卧|软座|硬座)")
+# 车厢座位号：如 14车09A号（OCR 有时误读"车"为"年"）
+_RE_CAR_SEAT = re.compile(r"(\d{1,2})[车年]\s*(\d{2,3}[A-Z])\s*[号号]", re.I)
+# 检票口信息（物理票特征）
+_RE_TRAIN_CHECKIN = re.compile(r"检\s*票\s*[:：]")
+# 票面序号：如 Z28U065543（字母+数字+字母+数字）
+_RE_TICKET_SERIAL = re.compile(r"[A-Z]\d+[A-Z]\d{4,}")
+
+
+def _score_train_physical(text: str) -> int:
+    """
+    对 OCR 全文进行多信号叠加评分，判断是否为物理火车票（报销凭证）。
+    分值 >= 10 则认定为 train_physical。
+    """
+    score = 0
+    # 最强信号：报销专用标识
+    if re.search(r"(报销凭证|仅供报销使用)", text):
+        score += 10
+    # 车次号（G/D/C/K/T/Z + 2-5 位数字）
+    if _RE_TRAIN_NO.search(text):
+        score += 5
+    # 座位等级
+    if _RE_SEAT_CLASS.search(text):
+        score += 5
+    # 发车时间 "HH:MM开"
+    if re.search(r"\d{1,2}:\d{2}\s*开", text):
+        score += 4
+    # 检票口信息
+    if _RE_TRAIN_CHECKIN.search(text):
+        score += 4
+    # 站名
+    stations = _RE_STATION_SINGLE.findall(text)
+    if len(stations) >= 1:
+        score += 3
+    # 票面序号格式（字母+数字+字母+数字，如 Z28U065543）
+    if _RE_TICKET_SERIAL.search(text):
+        score += 3
+    # 金额 ¥xxx.x元 格式
+    if _RE_TRAIN_AMOUNT_YUAN.search(text):
+        score += 3
+    # 退票/改签提示（票背面文字）
+    if re.search(r"(退票|改签|须交回车站)", text):
+        score += 3
+    return score
+
+
+def _preprocess_image_for_ocr(image_path: str) -> Optional[str]:
+    """
+    对手机拍摄的图片进行预处理以提升 OCR 识别率。
+    增强对比度和锐度，必要时放大低分辨率图片。
+    返回预处理后的临时文件路径；若失败则返回 None，调用方应继续使用原路径。
+    """
+    try:
+        from PIL import Image, ImageEnhance
+        img = Image.open(image_path)
+        if img.mode == "RGBA":
+            img = img.convert("RGB")
+        elif img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+
+        # 低分辨率图片放大，保证 OCR 有足够像素
+        w, h = img.size
+        if min(w, h) < 1000:
+            scale = 1000 / min(w, h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # 增强对比度（1.5×）和锐度（2.0×）
+        img = ImageEnhance.Contrast(img).enhance(1.5)
+        img = ImageEnhance.Sharpness(img).enhance(2.0)
+
+        fd, tmp = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        img.save(tmp, "PNG")
+        return tmp
+    except Exception as e:
+        logger.debug("图像预处理失败（将使用原图）: %s", e)
+        return None
 
 
 _rapid_ocr_engine: Any = None
@@ -140,6 +238,25 @@ def _pdf_text_then_ocr(path: str, ocr_cfg: dict, ocr_fn: Callable[[str], str]) -
 
 
 def _image_to_text(path: str, ocr_fn: Callable[[str], str]) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    # 手机拍摄的 JPEG 图片先做图像增强，提升 OCR 准确率
+    preprocessed: Optional[str] = None
+    if ext in (".jpg", ".jpeg"):
+        preprocessed = _preprocess_image_for_ocr(path)
+
+    if preprocessed:
+        try:
+            result = ocr_fn(preprocessed) or ""
+            # 若预处理后识别结果比原图好（字符更多），使用预处理结果
+            raw_result = ocr_fn(path) or ""
+            return result if len(result) >= len(raw_result) else raw_result
+        except Exception:
+            return ocr_fn(path) or ""
+        finally:
+            try:
+                os.unlink(preprocessed)
+            except OSError:
+                pass
     return ocr_fn(path) or ""
 
 
@@ -198,19 +315,62 @@ def _heuristic_raw(full_text: str, inv_type: str) -> dict[str, Any]:
         tm = _RE_TRAIN_NO.search(text)
         if tm:
             raw["train_number"] = tm.group(1).upper()
+
+        # 站名提取：优先"站名→站名"格式，其次"站名 车次 站名"物理票版式，最后取前两个站名
         sm = _RE_STATION_PAIR.search(text)
         if sm:
             raw["departure_station"] = sm.group(1)
             raw["arrival_station"] = sm.group(2)
+        else:
+            sm2 = _RE_STATION_PAIR_PHYSICAL.search(text)
+            if sm2:
+                raw["departure_station"] = sm2.group(1)
+                raw["arrival_station"] = sm2.group(2)
+            else:
+                stations = _RE_STATION_SINGLE.findall(text)
+                if len(stations) >= 2:
+                    raw["departure_station"] = stations[0]
+                    raw["arrival_station"] = stations[1]
+
         raw["invoice_type"] = raw.get("invoice_type") or (
             "铁路电子客票" if inv_type == "train_electronic" else "火车票"
         )
+
+        # 发车日期+时间（如 "2024年08月25日14:02开"）
+        if not raw.get("departure_date"):
+            dtm = _RE_TRAIN_DEPART_DT.search(text)
+            if dtm:
+                raw["departure_date"] = dtm.group(1)
+                raw["departure_time"] = dtm.group(2)
+            elif not raw.get("issue_date"):
+                # 尝试通用日期格式
+                gd = re.search(r"(\d{4}年\d{1,2}月\d{1,2}日)", text)
+                if gd:
+                    raw["departure_date"] = gd.group(1)
+
+        # 金额提取：¥xxx.x元 / ￥xxx.x元 / 金额:
         if not raw.get("amount"):
-            for pat in (r"￥\s*([\d,，．\.]+)\s*元", r"金额\s*[：:]\s*[¥￥]?\s*([\d,，．\.]+)"):
-                mx = re.search(pat, text)
-                if mx:
-                    raw["amount"] = mx.group(1).strip()
-                    break
+            mx = _RE_TRAIN_AMOUNT_YUAN.search(text)
+            if mx:
+                raw["amount"] = mx.group(1).strip()
+            else:
+                for pat in (r"[¥￥]\s*([\d,，\.]+)", r"金额\s*[：:]\s*[¥￥]?\s*([\d,，\.]+)"):
+                    mx2 = re.search(pat, text)
+                    if mx2:
+                        raw["amount"] = mx2.group(1).strip()
+                        break
+
+        # 座位等级
+        if not raw.get("seat_class"):
+            sc = _RE_SEAT_CLASS.search(text)
+            if sc:
+                raw["seat_class"] = sc.group(1)
+
+        # 车厢座位号
+        if not raw.get("car_seat"):
+            cs = _RE_CAR_SEAT.search(text)
+            if cs:
+                raw["car_seat"] = f"{cs.group(1)}车{cs.group(2)}号"
 
     elif inv_type in ("air_itinerary", "air_electronic"):
         fm = _RE_FLIGHT_NO.search(text)
@@ -251,7 +411,13 @@ def _refine_invoice_type(filename: str, full_text: str, inv_type: str) -> str:
     if inv_type == "general":
         refined = detect_invoice_type("", full_text)
         if refined != "general":
+            logger.debug("_refine_invoice_type: content_rules -> %s", refined)
             return refined
+        # 内容规则未命中时，使用多信号评分兜底识别物理火车票
+        score = _score_train_physical(full_text)
+        logger.debug("_refine_invoice_type: train_physical_score=%d", score)
+        if score >= 10:
+            return "train_physical"
         return "general_invoice"
     return inv_type
 
