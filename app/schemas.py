@@ -155,6 +155,8 @@ class MessageResponse(BaseModel):
 
 class ProcessRequest(BaseModel):
     invoice_ids: Optional[list[int]] = None
+    """不参与本次归集的发票 ID（例如已移入前端历史归档区的发票）。"""
+    exclude_invoice_ids: Optional[list[int]] = None
     force_reclassify: bool = False
     use_subcategory: bool = True  # 使用内容分析子类型映射
     use_rules: bool = True        # 使用规则匹配

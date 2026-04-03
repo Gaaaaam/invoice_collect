@@ -9,7 +9,7 @@ import yaml
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, delete, update
+from sqlalchemy import select, delete, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, AsyncSessionLocal
@@ -169,6 +169,10 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
             else:
                 stmt = select(Invoice).where(Invoice.extract_status == "done")
 
+            excl = [x for x in (request.exclude_invoice_ids or []) if isinstance(x, int)]
+            if excl:
+                stmt = stmt.where(~Invoice.id.in_(excl))
+
             result = await db.execute(stmt)
             invoices: list[Invoice] = list(result.scalars().all())
 
@@ -289,20 +293,28 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 travel_dicts = [_invoice_to_dict(inv) for inv in travel_invoices]
                 loops = detect_travel_loops(travel_dicts)
 
+                # 仅解除「本次参与差旅分组」的发票与旧组的关联，避免误伤未参与归集的发票（如历史归档）
+                travel_ids_to_regroup = {inv.id for inv in travel_invoices}
+                await db.execute(
+                    update(CollectionItem)
+                    .where(CollectionItem.invoice_id.in_(travel_ids_to_regroup))
+                    .where(CollectionItem.category_id == "travel")
+                    .values(group_id=None)
+                )
+                await db.flush()
+
                 old_groups = await db.execute(
                     select(CollectionGroup).where(CollectionGroup.category_id == "travel")
                 )
                 old_travel_group_list = list(old_groups.scalars().all())
-                if old_travel_group_list:
-                    old_gids = [g.id for g in old_travel_group_list]
-                    await db.execute(
-                        update(CollectionItem)
-                        .where(CollectionItem.group_id.in_(old_gids))
-                        .values(group_id=None)
-                    )
-                    await db.flush()
                 for g in old_travel_group_list:
-                    await db.delete(g)
+                    cnt = await db.scalar(
+                        select(func.count())
+                        .select_from(CollectionItem)
+                        .where(CollectionItem.group_id == g.id)
+                    )
+                    if cnt == 0:
+                        await db.delete(g)
                 await db.flush()
 
                 closed = sum(1 for l in loops if l.is_closed)
@@ -357,20 +369,27 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 meeting_dicts = [_invoice_to_dict(inv) for inv in meeting_invoices]
                 meeting_groups = await group_meeting_invoices(meeting_dicts)
 
+                meeting_ids_to_regroup = {inv.id for inv in meeting_invoices}
+                await db.execute(
+                    update(CollectionItem)
+                    .where(CollectionItem.invoice_id.in_(meeting_ids_to_regroup))
+                    .where(CollectionItem.category_id == "meeting")
+                    .values(group_id=None)
+                )
+                await db.flush()
+
                 old_groups = await db.execute(
                     select(CollectionGroup).where(CollectionGroup.category_id == "meeting")
                 )
                 old_meeting_group_list = list(old_groups.scalars().all())
-                if old_meeting_group_list:
-                    old_mgids = [g.id for g in old_meeting_group_list]
-                    await db.execute(
-                        update(CollectionItem)
-                        .where(CollectionItem.group_id.in_(old_mgids))
-                        .values(group_id=None)
-                    )
-                    await db.flush()
                 for g in old_meeting_group_list:
-                    await db.delete(g)
+                    cnt = await db.scalar(
+                        select(func.count())
+                        .select_from(CollectionItem)
+                        .where(CollectionItem.group_id == g.id)
+                    )
+                    if cnt == 0:
+                        await db.delete(g)
                 await db.flush()
 
                 inv_id_to_dict = {inv.id: _invoice_to_dict(inv) for inv in meeting_invoices}

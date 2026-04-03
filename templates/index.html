@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="appTitle">发票归集系统</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260402g" />
+  <link rel="stylesheet" href="/static/css/style.css?v=20260403a" />
 </head>
 <body>
 
@@ -116,10 +116,31 @@
     </div>
   </aside>
 
-  <!-- 右侧看板 -->
-  <main class="board-container" id="boardContainer">
-    <!-- 由 JS 动态渲染 -->
-  </main>
+  <!-- 中部看板 + 右侧历史归档 -->
+  <div class="board-layout" id="boardLayout">
+    <main class="board-container" id="boardContainer">
+      <!-- 由 JS 动态渲染 -->
+    </main>
+    <aside class="archive-panel" id="archivePanel" aria-label="历史归档">
+      <div class="archive-panel-inner" id="archivePanelInner">
+        <div class="archive-panel-header">
+          <div class="archive-panel-header-row">
+            <span class="archive-panel-title" data-i18n="historyArchive">历史归档</span>
+            <button type="button" class="btn btn-outline btn-sm" id="btnArchiveToggle" data-i18n="archiveCollapse">收起</button>
+          </div>
+          <div class="archive-panel-actions">
+            <button type="button" class="btn btn-outline btn-sm" id="btnBatchArchiveBoard" data-i18n="batchArchive">批量归档</button>
+            <button type="button" class="btn btn-outline btn-sm" id="btnBatchRestoreArchive" data-i18n="batchRestore">批量复原</button>
+          </div>
+        </div>
+        <div class="archive-drop-zone" id="archiveDropZone">
+          <div class="archive-empty-hint" id="archiveEmptyHint" data-i18n="archiveDropHint">使用分组上的「归档」将分组移入此处；归档内点「复原」可回到原费用类型与原分组。</div>
+          <div class="archive-entries" id="archiveEntries"></div>
+        </div>
+      </div>
+      <button type="button" class="archive-expand-tab" id="btnArchiveExpand" data-i18n-title="archiveExpandTitle" title="展开历史归档">📂</button>
+    </aside>
+  </div>
 </div>
 
 <!-- ─── Upload Loading Overlay（上传 / 抽取：节点式进度，与归集弹窗风格一致）──── -->
@@ -357,6 +378,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="/static/js/app.js?v=20260402e"></script>
+<script src="/static/js/app.js?v=20260402f"></script>
 </body>
 </html>

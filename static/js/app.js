@@ -13,9 +13,15 @@ const state = {
   selectedInvoiceIds: new Set(), // 看板中多选的发票
   selectionAnchorId: null, // Shift 多选锚点
   lang: localStorage.getItem('invoice_collect_lang') || 'zh',
+  /** 历史归档条目（localStorage 持久化），按加入顺序排列 */
+  archiveEntries: [],
 };
 
+const ARCHIVE_STORAGE_KEY = 'invoice_collect_archive_v1';
+const ARCHIVE_PANEL_KEY = 'invoice_collect_archive_panel_visible';
+
 let _dragContext = null; // 记录拖拽开始时的选择上下文
+let _archivePanelUiBound = false;
 
 // 大类图标映射
 const CAT_ICONS = {
@@ -65,6 +71,24 @@ const I18N = {
     confirmBatchDelete: '确认删除选中的 {count} 张发票？此操作不可撤销。', batchDeleteOk: '已删除 {count} 张发票',
     batchDeleteFail: '批量删除失败：{error}', languageSwitchTitle: '切换语言',
     requestFailed: '请求失败',
+    historyArchive: '历史归档',
+    archiveCollapse: '收起',
+    archiveExpand: '展开',
+    archiveExpandTitle: '展开历史归档',
+    archiveDropHint: '分组上使用「归档」移入此处；归档中的发票不会参与「开始归集」。勾选多个分组后可点「批量归档」。',
+    btnArchive: '归档',
+    btnRestore: '复原',
+    batchArchive: '批量归档',
+    batchRestore: '批量复原',
+    archiveAdded: '已加入历史归档',
+    archiveOverlap: '该分组中有发票已在归档区，无法重复归档',
+    archiveNoUnclassified: '请放入具体费用类型下的区域，不能放入未分类列',
+    archiveRestored: '已从归档区恢复到看板',
+    archiveRestoreBadTarget: '该归档条目缺少有效的费用类型，无法复原',
+    archiveBatchNoneArchive: '请先勾选要归档的分组',
+    archiveBatchNoneRestore: '请先勾选要复原的归档条目',
+    archiveBatchArchived: '已批量归档 {count} 个分组',
+    archiveBatchRestored: '已批量复原 {count} 个分组',
   },
   en: {
     appTitle: 'Invoice Collection System', btnProcess: 'Start Collection', processOptions: 'Collection Options', config: 'Settings',
@@ -100,6 +124,24 @@ const I18N = {
     confirmBatchDelete: 'Delete selected {count} invoice(s)? This action cannot be undone.', batchDeleteOk: 'Deleted {count} invoice(s)',
     batchDeleteFail: 'Batch delete failed: {error}', languageSwitchTitle: 'Switch language',
     requestFailed: 'Request failed',
+    historyArchive: 'Archive',
+    archiveCollapse: 'Hide',
+    archiveExpand: 'Show',
+    archiveExpandTitle: 'Show archive panel',
+    archiveDropHint: 'Use Archive on each group to move it here. Archived invoices are excluded from Start Collection. Select multiple groups for batch archive.',
+    btnArchive: 'Archive',
+    btnRestore: 'Restore',
+    batchArchive: 'Archive selected',
+    batchRestore: 'Restore selected',
+    archiveAdded: 'Moved to archive',
+    archiveOverlap: 'Some invoices are already archived',
+    archiveNoUnclassified: 'Drop on a category column, not Unclassified',
+    archiveRestored: 'Restored from archive',
+    archiveRestoreBadTarget: 'This archive entry has no valid category',
+    archiveBatchNoneArchive: 'Select groups to archive first',
+    archiveBatchNoneRestore: 'Select archive entries to restore first',
+    archiveBatchArchived: 'Archived {count} group(s)',
+    archiveBatchRestored: 'Restored {count} group(s)',
   },
 };
 
@@ -344,6 +386,394 @@ function updateTotalBadge() {
   document.getElementById('totalBadge').textContent = t('totalBadge', { count: state.invoices.length });
 }
 
+// ─── 历史归档（localStorage + 归集排除）────────────────────────────────────────
+function loadArchiveFromStorage() {
+  try {
+    const raw = localStorage.getItem(ARCHIVE_STORAGE_KEY);
+    if (!raw) {
+      state.archiveEntries = [];
+      return;
+    }
+    const j = JSON.parse(raw);
+    const arr = Array.isArray(j.entries) ? j.entries : [];
+    state.archiveEntries = arr.filter(e => e && e.id && Array.isArray(e.invoiceIds) && e.invoiceIds.length);
+  } catch {
+    state.archiveEntries = [];
+  }
+}
+
+function saveArchiveToStorage() {
+  localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify({ entries: state.archiveEntries }));
+}
+
+function pruneArchiveEntries() {
+  const valid = new Set((state.invoices || []).map(i => i.id));
+  let changed = false;
+  const next = [];
+  for (const ent of state.archiveEntries || []) {
+    const ids = (ent.invoiceIds || []).filter(id => valid.has(id));
+    if (!ids.length) {
+      changed = true;
+      continue;
+    }
+    if (ids.length !== (ent.invoiceIds || []).length) changed = true;
+    next.push({ ...ent, invoiceIds: ids });
+  }
+  if (changed || next.length !== (state.archiveEntries || []).length) {
+    state.archiveEntries = next;
+    saveArchiveToStorage();
+  }
+}
+
+function getArchivedInvoiceIdSet() {
+  const s = new Set();
+  for (const e of state.archiveEntries || []) {
+    for (const id of e.invoiceIds || []) s.add(id);
+  }
+  return s;
+}
+
+function applyArchiveVisibility(result) {
+  if (!result) return null;
+  const archived = getArchivedInvoiceIdSet();
+  const fi = list => (list || []).filter(inv => !archived.has(inv.id));
+  const categories = (result.categories || []).map(cat => ({
+    ...cat,
+    groups: (cat.groups || [])
+      .map(g => {
+        const invs = fi(g.invoices);
+        if (!invs.length) return null;
+        return { ...g, invoices: invs };
+      })
+      .filter(Boolean),
+    ungrouped_invoices: fi(cat.ungrouped_invoices),
+  }));
+  const unclassified_invoices = fi(result.unclassified_invoices);
+  return { ...result, categories, unclassified_invoices };
+}
+
+function findInvoiceInResult(invoiceId) {
+  const r = state.collectionResult;
+  if (!r) return null;
+  for (const c of r.categories || []) {
+    for (const g of c.groups || []) {
+      const inv = (g.invoices || []).find(i => i.id === invoiceId);
+      if (inv) return inv;
+    }
+    for (const inv of c.ungrouped_invoices || []) {
+      if (inv.id === invoiceId) return inv;
+    }
+  }
+  for (const inv of r.unclassified_invoices || []) {
+    if (inv.id === invoiceId) return inv;
+  }
+  return (state.invoices || []).find(i => i.id === invoiceId) || null;
+}
+
+function makeArchiveEntryObject(payload) {
+  return {
+    id: (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `a${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    categoryId: payload.categoryId,
+    groupId: payload.groupId,
+    groupName: payload.groupName || '',
+    categoryName: payload.categoryName || '',
+    invoiceIds: [...payload.invoiceIds],
+    addedAt: Date.now(),
+  };
+}
+
+/** 基于当前归集结果构建归档载荷（排除已在归档中的发票） */
+function buildArchiveEntryPayload(categoryId, groupIdOpt) {
+  const raw = state.collectionResult;
+  if (!raw?.categories) return null;
+  const cat = raw.categories.find(c => c.category_id === categoryId);
+  if (!cat) return null;
+  const archived = getArchivedInvoiceIdSet();
+  let invoiceIds;
+  let groupName;
+  let gidStore = null;
+  if (groupIdOpt != null && Number.isFinite(Number(groupIdOpt))) {
+    const gid = Number(groupIdOpt);
+    const g = (cat.groups || []).find(x => x.id === gid);
+    if (!g?.invoices?.length) return null;
+    invoiceIds = g.invoices.map(i => i.id).filter(id => !archived.has(id));
+    groupName = g.name || '';
+    gidStore = gid;
+  } else {
+    invoiceIds = (cat.ungrouped_invoices || []).map(i => i.id).filter(id => !archived.has(id));
+    groupName = '';
+    gidStore = null;
+  }
+  if (!invoiceIds.length) return null;
+  return {
+    categoryId,
+    groupId: gidStore,
+    groupName,
+    categoryName: cat.category_name || '',
+    invoiceIds,
+  };
+}
+
+function tryArchiveBoardGroup(categoryId, groupIdOpt) {
+  const payload = buildArchiveEntryPayload(categoryId, groupIdOpt);
+  if (!payload) {
+    toast(t('noGroupInvoiceWarn'), 'warning');
+    return;
+  }
+  const busy = getArchivedInvoiceIdSet();
+  if (payload.invoiceIds.some(id => busy.has(id))) {
+    toast(t('archiveOverlap'), 'warning');
+    return;
+  }
+  state.archiveEntries.push(makeArchiveEntryObject(payload));
+  saveArchiveToStorage();
+  renderBoard();
+  renderArchivePanel();
+  toast(t('archiveAdded'), 'success');
+}
+
+function archiveBoardGroupFromBtn(ev, btn) {
+  ev.stopPropagation();
+  const cid = btn?.dataset?.archiveCat;
+  if (!cid) return;
+  const raw = btn.dataset.archiveGid;
+  const gid = raw === '' || raw === undefined ? null : parseInt(raw, 10);
+  tryArchiveBoardGroup(cid, Number.isFinite(gid) ? gid : null);
+}
+
+function batchArchiveSelectedBoardGroups() {
+  const checked = Array.from(document.querySelectorAll('.board-archive-select:checked'));
+  if (!checked.length) {
+    toast(t('archiveBatchNoneArchive'), 'warning');
+    return;
+  }
+  let ok = 0;
+  for (const cb of checked) {
+    const card = cb.closest('.group-card');
+    if (!card?.dataset.boardCategory) continue;
+    const cid = card.dataset.boardCategory;
+    const raw = card.dataset.boardGroupId;
+    const gidOpt = raw === '' || raw === undefined ? null : parseInt(raw, 10);
+    const payload = buildArchiveEntryPayload(cid, Number.isFinite(gidOpt) ? gidOpt : null);
+    if (!payload) continue;
+    const busy = getArchivedInvoiceIdSet();
+    if (payload.invoiceIds.some(id => busy.has(id))) {
+      toast(t('archiveOverlap'), 'warning');
+      continue;
+    }
+    state.archiveEntries.push(makeArchiveEntryObject(payload));
+    ok += 1;
+  }
+  if (ok > 0) {
+    saveArchiveToStorage();
+    renderBoard();
+    renderArchivePanel();
+    toast(t('archiveBatchArchived', { count: ok }), 'success');
+  } else {
+    toast(t('archiveBatchNoneArchive'), 'warning');
+  }
+}
+
+/** 按条目内保存的费用类型与分组 ID 复原（不依赖拖放落点） */
+async function restoreArchiveEntry(entryId) {
+  const idx = state.archiveEntries.findIndex(x => x.id === entryId);
+  if (idx < 0) return;
+  const entry = state.archiveEntries[idx];
+  const targetCategory = entry.categoryId;
+  const targetGroup = entry.groupId != null && entry.groupId !== '' && Number.isFinite(Number(entry.groupId))
+    ? Number(entry.groupId)
+    : null;
+  if (!targetCategory || targetCategory === 'unclassified') {
+    toast(t('archiveRestoreBadTarget'), 'warning');
+    return;
+  }
+  const ids = [...entry.invoiceIds];
+  state.archiveEntries.splice(idx, 1);
+  saveArchiveToStorage();
+  renderBoard();
+  renderArchivePanel();
+  try {
+    if (ids.length === 1) {
+      await api('PATCH', '/api/collections/move', {
+        invoice_id: ids[0],
+        target_category_id: targetCategory,
+        target_group_id: targetGroup,
+      });
+    } else {
+      await api('PATCH', '/api/collections/move/batch', {
+        invoice_ids: ids,
+        target_category_id: targetCategory,
+        target_group_id: targetGroup,
+      });
+    }
+    toast(t('archiveRestored'), 'success');
+    await loadCollectionResult();
+  } catch (e) {
+    state.archiveEntries.splice(idx, 0, entry);
+    saveArchiveToStorage();
+    renderBoard();
+    renderArchivePanel();
+    toast(`${t('requestFailed')}: ${e.message || e}`, 'error');
+  }
+}
+
+function restoreArchiveEntryFromBtn(ev, btn) {
+  ev.stopPropagation();
+  const id = btn?.getAttribute('data-archive-restore-id');
+  if (id) void restoreArchiveEntry(id);
+}
+
+async function batchRestoreSelectedArchiveEntries() {
+  const entryIds = Array.from(document.querySelectorAll('.archive-entry-select:checked'))
+    .map(cb => cb.closest('.archive-group-card')?.dataset.archiveEntryId)
+    .filter(Boolean);
+  if (!entryIds.length) {
+    toast(t('archiveBatchNoneRestore'), 'warning');
+    return;
+  }
+  const idSet = new Set(entryIds);
+  const removed = state.archiveEntries.filter(e => idSet.has(e.id));
+  if (!removed.length) {
+    toast(t('archiveBatchNoneRestore'), 'warning');
+    return;
+  }
+  state.archiveEntries = state.archiveEntries.filter(e => !idSet.has(e.id));
+  saveArchiveToStorage();
+  renderBoard();
+  renderArchivePanel();
+  const rollback = () => {
+    state.archiveEntries.push(...removed);
+    saveArchiveToStorage();
+    renderBoard();
+    renderArchivePanel();
+  };
+  try {
+    for (const ent of removed) {
+      const ids = [...ent.invoiceIds];
+      const tc = ent.categoryId;
+      const tg = ent.groupId != null && ent.groupId !== '' && Number.isFinite(Number(ent.groupId))
+        ? Number(ent.groupId)
+        : null;
+      if (!tc || tc === 'unclassified') throw new Error(t('archiveRestoreBadTarget'));
+      if (ids.length === 1) {
+        await api('PATCH', '/api/collections/move', {
+          invoice_id: ids[0],
+          target_category_id: tc,
+          target_group_id: tg,
+        });
+      } else {
+        await api('PATCH', '/api/collections/move/batch', {
+          invoice_ids: ids,
+          target_category_id: tc,
+          target_group_id: tg,
+        });
+      }
+    }
+    toast(t('archiveBatchRestored', { count: removed.length }), 'success');
+    await loadCollectionResult();
+  } catch (e) {
+    rollback();
+    toast(`${t('requestFailed')}: ${e.message || e}`, 'error');
+  }
+}
+
+function renderArchivePanel() {
+  const mount = document.getElementById('archiveEntries');
+  const hint = document.getElementById('archiveEmptyHint');
+  if (!mount) return;
+  if (!(state.archiveEntries || []).length) {
+    mount.innerHTML = '';
+    if (hint) hint.classList.remove('hidden');
+    return;
+  }
+  if (hint) hint.classList.add('hidden');
+  mount.innerHTML = state.archiveEntries.map(ent => {
+    const catLabel = displayCategoryName(ent.categoryId, ent.categoryName || '');
+    const n = (ent.invoiceIds || []).length;
+    const rows = (ent.invoiceIds || []).map(id => {
+      const inv = findInvoiceInResult(id);
+      const title = inv?.invoice_type || inv?.filename || `#${id}`;
+      const amt = inv?.total_amount != null ? `¥${Number(inv.total_amount).toFixed(2)}` : '';
+      const date = (inv?.issue_date || '').slice(0, 10);
+      return `
+        <div class="archive-inv-row">
+          <span class="archive-inv-icon">${invoiceIcon(inv?.invoice_type)}</span>
+          <div class="archive-inv-info">
+            <div class="archive-inv-title">${escHtml(title)}</div>
+            <div class="archive-inv-sub">${escHtml(date)}${amt ? ' · ' + amt : ''}</div>
+          </div>
+        </div>`;
+    }).join('');
+    const gname = ent.groupName || t('ungrouped');
+    return `
+      <div class="archive-group-card" data-archive-entry-id="${escAttr(ent.id)}">
+        <div class="archive-group-header" onclick="toggleArchiveEntry(event, this)">
+          <input type="checkbox" class="archive-entry-select" onclick="event.stopPropagation()"
+                 title="" aria-label="select archive entry" />
+          <span class="archive-cat-badge" title="${escAttr(catLabel)}">${escHtml(catLabel)}</span>
+          <span class="archive-group-name" title="${escAttr(ent.groupName || '')}">${escHtml(gname)}</span>
+          <span class="archive-group-meta">${t('invoiceCount', { count: n })}</span>
+          <div class="archive-entry-actions">
+            <button type="button" class="btn btn-outline btn-sm btn-restore-archive"
+                    data-archive-restore-id="${escAttr(ent.id)}"
+                    onclick="restoreArchiveEntryFromBtn(event, this)">${t('btnRestore')}</button>
+          </div>
+          <span class="archive-group-toggle group-toggle">▼</span>
+        </div>
+        <div class="archive-group-body collapsed">${rows}</div>
+      </div>`;
+  }).join('');
+}
+
+function toggleArchiveEntry(ev, header) {
+  if (ev && (ev.target.closest('button') || ev.target.closest('input[type="checkbox"]'))) return;
+  const body = header.nextElementSibling;
+  const toggle = header.querySelector('.archive-group-toggle');
+  if (body) body.classList.toggle('collapsed');
+  if (toggle) toggle.classList.toggle('collapsed');
+}
+
+function syncArchiveToggleLabels() {
+  const layout = document.getElementById('boardLayout');
+  const collapsed = layout?.classList.contains('archive-collapsed');
+  const btn = document.getElementById('btnArchiveToggle');
+  if (btn) btn.textContent = collapsed ? t('archiveExpand') : t('archiveCollapse');
+  document.getElementById('btnArchiveExpand')?.setAttribute('title', t('archiveExpandTitle'));
+}
+
+function applyArchivePanelCollapsedState() {
+  const layout = document.getElementById('boardLayout');
+  if (!layout) return;
+  if (localStorage.getItem(ARCHIVE_PANEL_KEY) === '0') {
+    layout.classList.add('archive-collapsed');
+  } else {
+    layout.classList.remove('archive-collapsed');
+  }
+  syncArchiveToggleLabels();
+}
+
+function setupArchivePanelOnce() {
+  if (_archivePanelUiBound) return;
+  _archivePanelUiBound = true;
+  const layout = document.getElementById('boardLayout');
+  document.getElementById('btnArchiveToggle')?.addEventListener('click', () => {
+    layout?.classList.add('archive-collapsed');
+    localStorage.setItem(ARCHIVE_PANEL_KEY, '0');
+    syncArchiveToggleLabels();
+  });
+  document.getElementById('btnArchiveExpand')?.addEventListener('click', () => {
+    layout?.classList.remove('archive-collapsed');
+    localStorage.setItem(ARCHIVE_PANEL_KEY, '1');
+    syncArchiveToggleLabels();
+  });
+  document.getElementById('btnBatchArchiveBoard')?.addEventListener('click', batchArchiveSelectedBoardGroups);
+  document.getElementById('btnBatchRestoreArchive')?.addEventListener('click', () => {
+    void batchRestoreSelectedArchiveEntries();
+  });
+}
+
 function getVisibleInvCardIds() {
   return Array.from(document.querySelectorAll('.inv-card')).map(el => parseInt(el.dataset.id)).filter(Number.isFinite);
 }
@@ -537,11 +967,13 @@ document.getElementById('btnProcess').addEventListener('click', async () => {
   // 关闭选项面板
   document.getElementById('processOptionsPanel').classList.add('hidden');
 
+  const excl = Array.from(getArchivedInvoiceIdSet());
   const body = {
     force_reclassify: document.getElementById('optForceReclassify').checked,
     use_subcategory:  document.getElementById('optSubcategory').checked,
     use_rules:        document.getElementById('optRules').checked,
     use_llm:          document.getElementById('optLLM').checked,
+    exclude_invoice_ids: excl.length ? excl : undefined,
   };
 
   // 至少要选一种分类方式
@@ -762,7 +1194,9 @@ function appendLog(msg, type = '') {
 // ─── Load & Render Collection Result (board) ─────────────────────────────────
 async function loadCollectionResult() {
   state.collectionResult = await api('GET', '/api/collections/result');
+  pruneArchiveEntries();
   renderBoard();
+  renderArchivePanel();
 }
 
 function renderBoard() {
@@ -771,7 +1205,10 @@ function renderBoard() {
   state.sortableInstances.forEach(s => s.destroy());
   state.sortableInstances = [];
 
-  const result = state.collectionResult;
+  const raw = state.collectionResult;
+  if (!raw) { board.innerHTML = ''; return; }
+
+  const result = applyArchiveVisibility(raw);
   if (!result) { board.innerHTML = ''; return; }
 
   const cols = [];
@@ -837,11 +1274,17 @@ function renderCategoryCol(cat) {
     bodyHtml += cat.groups.map((g, gi) => renderGroupCard(g, cat)).join('');
     // 无组散票容器始终保留，便于空列时也可拖拽进入
     bodyHtml += `
-      <div class="group-card">
-        <div class="group-header" onclick="toggleGroup(this)">
+      <div class="group-card" data-board-category="${escAttr(cat.category_id)}" data-board-group-id="">
+        <div class="group-header" onclick="toggleGroup(event, this)">
+          <input type="checkbox" class="board-archive-select" onclick="event.stopPropagation()"
+                 title="${escAttr(t('batchArchive'))}" aria-label="${escAttr(t('batchArchive'))}" />
           <span class="group-icon">📄</span>
           <span class="group-name">${t('ungrouped')}</span>
           <span class="group-count">${t('invoiceCount', { count: cat.ungrouped_invoices?.length || 0 })}</span>
+          <button type="button" class="btn btn-outline btn-sm btn-archive-group"
+                  data-archive-cat="${escAttr(cat.category_id)}" data-archive-gid=""
+                  onclick="archiveBoardGroupFromBtn(event, this)"
+                  title="${escAttr(t('btnArchive'))}">${t('btnArchive')}</button>
           <button class="group-select-btn"
                   data-category="${cat.category_id}"
                   data-group=""
@@ -887,12 +1330,19 @@ function renderGroupCard(group, cat) {
     ? `${group.start_date}${group.end_date && group.end_date !== group.start_date ? ' ~ ' + group.end_date : ''}`
     : '';
   return `
-    <div class="group-card" id="group-card-${group.id}">
-      <div class="group-header" onclick="toggleGroup(this)">
+    <div class="group-card" id="group-card-${group.id}"
+         data-board-category="${cat.category_id}" data-board-group-id="${group.id}">
+      <div class="group-header" onclick="toggleGroup(event, this)">
+        <input type="checkbox" class="board-archive-select" onclick="event.stopPropagation()"
+               title="${escAttr(t('batchArchive'))}" aria-label="${escAttr(t('batchArchive'))}" />
         <span class="group-icon">${icon}</span>
         <span class="group-name" ondblclick="renameGroup(${group.id}, this)">${escHtml(group.name)}</span>
         ${dateRange ? `<span class="group-count text-muted" style="font-size:10px">${dateRange}</span>` : ''}
         <span class="group-count">${t('invoiceCount', { count: group.invoices.length })}</span>
+        <button type="button" class="btn btn-outline btn-sm btn-archive-group"
+                data-archive-cat="${escAttr(cat.category_id)}" data-archive-gid="${group.id}"
+                onclick="archiveBoardGroupFromBtn(event, this)"
+                title="${escAttr(t('btnArchive'))}">${t('btnArchive')}</button>
         <button class="group-select-btn"
                 data-category="${cat.category_id}"
                 data-group="${group.id}"
@@ -1103,7 +1553,8 @@ async function moveInvoicesBatch(invoiceIds, categoryId, groupId) {
 }
 
 // ─── Group Utilities ──────────────────────────────────────────────────────────
-function toggleGroup(header) {
+function toggleGroup(ev, header) {
+  if (ev && (ev.target.closest('button') || ev.target.closest('input[type="checkbox"]'))) return;
   const body = header.nextElementSibling;
   const toggle = header.querySelector('.group-toggle');
   body.classList.toggle('collapsed');
@@ -1486,6 +1937,8 @@ function applyLanguage() {
   refreshSelectionUI();
   renderInvoiceList();
   renderBoard();
+  renderArchivePanel();
+  syncArchiveToggleLabels();
 }
 
 function switchLanguage() {
@@ -1499,7 +1952,10 @@ document.getElementById('btnLangToggle')?.addEventListener('click', switchLangua
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async function init() {
   try {
+    loadArchiveFromStorage();
     applyLanguage();
+    setupArchivePanelOnce();
+    applyArchivePanelCollapsedState();
     // 加载大类配置（用于拖拽逻辑中的验证）
     const cats = await api('GET', '/api/config/categories');
     state.categories = cats.categories;
