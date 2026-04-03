@@ -6,7 +6,8 @@
   2. 城市识别：通过 station_city_map 将车站/机场名统一到城市名
   3. 混合交通支持：飞机、火车、高铁、动车可混搭组成闭环
   4. 以每张交通票的"出发城市"为起点，贪心延伸行程
-     - 下一张票的"出发城市" == 当前票的"到达城市" → 接续
+     - 优先从 home_city（用户所在城市）出发的票开始组链，避免"回家票"误消耗出发票
+     - 下一张票的"出发城市" == 当前票的"到达城市" → 接续（在时间上位于链起始票之后）
      - 当某票的"到达城市" == 起点城市 → 闭环成立
   5. 将闭环时间段内的所有差旅费发票（含住宿/餐饮/出租等）归入同一组
   6. 未参与闭环的交通票各自成组（未闭合行程），无交通票的散票单独一组
@@ -127,7 +128,10 @@ def _get_transport_mode(inv: dict) -> str:
     return "交通"
 
 
-def detect_travel_loops(travel_invoices: list[dict]) -> list[TravelLoop]:
+def detect_travel_loops(
+    travel_invoices: list[dict],
+    home_city: str = "上海",
+) -> list[TravelLoop]:
     """
     对差旅费发票进行闭环检测，返回 TravelLoop 列表。
 
@@ -135,15 +139,19 @@ def detect_travel_loops(travel_invoices: list[dict]) -> list[TravelLoop]:
         travel_invoices: 已分类为差旅费的全部发票字典列表。
             is_transport=True  → 城市间交通票（参与闭环检测）
             is_transport=False → 其他差旅相关票（住宿/出租/餐饮等，按时间归入闭环）
+        home_city: 用户所在城市（归集设置中的"我所在的城市"），默认"上海"。
+            用于优先以 home_city 出发的票作为行程起点，避免回程孤票
+            提前"消耗"出发票，导致本该成环的行程被判为未闭合。
     """
     transport = [inv for inv in travel_invoices if inv.get("is_transport")]
     non_transport = [inv for inv in travel_invoices if not inv.get("is_transport")]
 
     logger.info(
-        "travel_loops input total=%s transport=%s non_transport=%s",
+        "travel_loops input total=%s transport=%s non_transport=%s home_city=%s",
         len(travel_invoices),
         len(transport),
         len(non_transport),
+        home_city,
     )
 
     if not transport:
@@ -165,10 +173,29 @@ def detect_travel_loops(travel_invoices: list[dict]) -> list[TravelLoop]:
 
     transport_sorted = sorted(transport, key=sort_key)
 
+    # 优先从 home_city 出发的票开始组链。
+    # 这样可避免"上次出差的回程票"（如 BJ→SH）在时间上排在前面，
+    # 贪心地将后续"本次出发票"（如 SH→BJ）纳入自己的链中，
+    # 导致本该成环的行程被错误地标记为未闭合。
+    home = _normalize_city(home_city) if home_city else ""
+    if home:
+        home_indices = [
+            i for i, inv in enumerate(transport_sorted)
+            if _normalize_city(inv.get("departure_city")) == home
+        ]
+        other_indices = [
+            i for i, inv in enumerate(transport_sorted)
+            if _normalize_city(inv.get("departure_city")) != home
+        ]
+        start_order = home_indices + other_indices
+    else:
+        start_order = list(range(len(transport_sorted)))
+
     loops: list[TravelLoop] = []
     used: set[int] = set()
 
-    for start_idx, start_inv in enumerate(transport_sorted):
+    for start_idx in start_order:
+        start_inv = transport_sorted[start_idx]
         if start_inv["id"] in used:
             continue
 
@@ -206,12 +233,13 @@ def detect_travel_loops(travel_invoices: list[dict]) -> list[TravelLoop]:
             cities_path.append(current_dest)
 
         if not closed:
+            # 在时间上位于链起始票之后的所有未使用交通票中寻找接续段。
+            # 用 start_idx 定位起始票在时间排序中的位置，确保接续票时间上不早于出发。
             for inv in transport_sorted[start_idx + 1:]:
                 if inv["id"] in used:
                     continue
                 dep = _normalize_city(inv.get("departure_city"))
 
-                # 城市匹配：精确 or 近似（处理"北京"/"北京市"等细微差异）
                 if dep == current_dest:
                     chain.append(inv)
                     used.add(inv["id"])
