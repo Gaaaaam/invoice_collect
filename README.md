@@ -6,18 +6,18 @@
 
 ---
 
-## 📖 简介 (Introduction)
+## 📖 简介
 
 **核心痛点解决**：报销贴票、整理发票是一项繁琐的工作。本项目旨在通过 AI 技术与规则引擎，实现发票的自动化结构提取，并根据业务逻辑（如出差行程、会议批次）自动将发票聚类归集，极大地降低人工整理的成本。
 
-## ✨ 核心特性 (Key Features)
+## ✨ 核心特性
 
 - 🧠 **双阶提取**：结合 NuExtract 与 OCR 降级方案（RapidOCR/Tesseract/EasyOCR），精准识别各类发票字段。
 - ✈️ **差旅闭环**：基于城市与时间链条，自动将车票、机票、酒店、打车等发票归集为一次“差旅”。
 - 📅 **智能聚类**：利用启发式算法（同一销售方+同一天）与 LLM 识别会议等批量发票。
 - 🖱️ **人工干预**：支持在 UI 上通过拖拽调整归集结果，满足复杂或异常的报销场景。
 
-## 📸 界面展示 (Showcase / Demo)
+## 📸 界面展示
 
 ### 1. 架构概览
 ![项目架构图](./assets/system_structure_ch.webp)
@@ -31,15 +31,15 @@
 ![交互](./assets/pull_and_drag.gif)
 
 
-## 🚀 快速开始 (Quick Start)
+## 🚀 快速开始
 
-### 前置要求 (Prerequisites)
+### 前置要求
 
 - **Python** >= 3.9
 - **API Key** (可选，推荐)：配置兼容 OpenAI 的大模型 API，用于更精准的分类和会议分组。
 - **NuExtract** (可选)：如需强大的结构化提取能力，需自备 NuExtract 服务；否则系统将自动降级使用本地 OCR。
 
-### 安装与运行 (Installation)
+### 安装与运行
 
 ```bash
 # 1. 克隆项目
@@ -60,9 +60,44 @@ python main.py
 
 访问 `http://127.0.0.1:8088/` 即可体验。
 
-> **Docker 部署**：项目同样支持 Docker 与 Docker Compose 一键部署，详情可参考旧版文档的 Docker 章节。
+### Docker 部署
+```
+docker pull kyriegan1007/invoice-collect:latest
+```
 
-## 💡 核心逻辑深度解析 (Feature Deep-dive)
+### 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `INVOICE_COLLECT_LOG_LEVEL` | 日志级别，默认 `INFO`；设为 `DEBUG` 可查看单张发票上下文、LLM 原始片段等 |
+| `INVOICE_COLLECT_DATA_DIR` | 可选。存放 `invoice_collect.db` 与 `uploads/` 的目录；默认与源码根目录一致。Docker 中常设为 `/data` 并挂载数据卷。 |
+| `INVOICE_COLLECT_HOST` | Uvicorn 监听地址（镜像内默认 `0.0.0.0`）。 |
+| `INVOICE_COLLECT_PORT` | 监听端口（镜像内默认 `8088`）。 |
+| `INVOICE_COLLECT_LLM_BASE_URL` | 可选。运行时覆盖 `config/models.yml` 中的 `llm.base_url`。 |
+| `INVOICE_COLLECT_LLM_API_KEY` | 可选。运行时覆盖 `llm.api_key`。 |
+| `INVOICE_COLLECT_LLM_MODEL` | 可选。运行时覆盖 `llm.model`。 |
+| `INVOICE_COLLECT_LLM_TIMEOUT` | 可选。运行时覆盖 `llm.timeout`（秒，整数）。 |
+| `INVOICE_COLLECT_NUEXTRACT_HOST` | 可选。运行时覆盖 `nuextract.host`。 |
+| `INVOICE_COLLECT_NUEXTRACT_PORT` | 可选。运行时覆盖 `nuextract.port`。 |
+| `INVOICE_COLLECT_NUEXTRACT_TIMEOUT` | 可选。运行时覆盖 `nuextract.timeout`（秒，整数）。 |
+
+### 指令示例
+
+``` bash
+docker run -d --name invoice-collect -p 8088:8088 \
+-v /your/data/path:/data \
+-e INVOICE_COLLECT_DATA_DIR=/data \
+-e INVOICE_COLLECT_LLM_BASE_URL=your-llm-base-url \
+-e INVOICE_COLLECT_LLM_MODEL=your-model-name \
+-e INVOICE_COLLECT_LLM_API_KEY=your-api-key \
+-e INVOICE_COLLECT_NUEXTRACT_HOST=your-nuextract-host \
+-e INVOICE_COLLECT_NUEXTRACT_PORT=your-nuextract-port \
+kyriegan1007/invoice-collect:latest
+```
+
+访问 `http://your-service-ip:8088/` 即可体验。
+
+## 💡 核心逻辑深度解析
 
 本项目不仅提供了基础设施，更内置了贴合真实报销场景的业务逻辑。
 
@@ -82,7 +117,7 @@ python main.py
 1. **类型判别**：首先判断发票的具体类型（如铁路电子客票、航空行程单等）。
 2. **定向抽取**：根据判断出的类型，应用 JSON 模板中对应的高度定制化 schema，从而最大化发挥大模型结构化提取的准确度。并且这种设计极具扩展性，只需修改 JSON 文件即可轻松支持新票种。
 
-## ⚙️ 配置指南 (Configuration)
+## ⚙️ 配置指南
 
 系统的大部分行为由 `config/` 目录下的 YAML/JSON 文件控制。
 
@@ -115,19 +150,19 @@ python main.py
   target_category: travel
 ```
 
-## 🛠 技术栈 (Tech Stack)
+## 🛠 技术栈
 
 - **后端**: FastAPI, SQLAlchemy 2 (async), SQLite
 - **前端**: Jinja2, HTML5 / Vanilla JS / CSS3
 - **AI / 核心能力**: OpenAI-compatible LLM 接口, NuExtract (异步 HTTP 客户端), RapidOCR/Tesseract/EasyOCR
 
-## 🗺 项目路线图 (Roadmap)
+## 🗺 项目路线图
 
 - 支持更多类型的电子票据（如行程单 PDF 直接解析）。
 - 增加报销单自动生成导出功能（Excel/PDF）。
 - 对接更多国产 LLM 模型（如通义千问、DeepSeek）以提供开箱即用的体验优化。
 - *(规划中)* 完善移动端浏览体验。
 
-## 📄 开源协议 (License)
+## 📄 开源协议
 
 [Apache 2.0 License](LICENSE)

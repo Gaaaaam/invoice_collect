@@ -60,16 +60,43 @@ python main.py
 
 Open `http://127.0.0.1:8088/`.
 
-### Docker
-
-Build and run with Docker Compose (data persisted in a named volume):
+### Docker deployment
 
 ```bash
-# Optional: copy .env.example to .env and set LLM / NuExtract overrides
-docker compose up -d --build
+docker pull kyriegan1007/invoice-collect:latest
 ```
 
-The app listens on port **8088**. Environment variables such as `INVOICE_COLLECT_LLM_*` and `INVOICE_COLLECT_NUEXTRACT_*` override `config/models.yml` when set (see `.env.example` and `docker-compose.yml`).
+### Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `INVOICE_COLLECT_LOG_LEVEL` | Log level; default `INFO`. Set to `DEBUG` to see per-invoice context, raw LLM fragments, etc. |
+| `INVOICE_COLLECT_DATA_DIR` | Optional. Directory for `invoice_collect.db` and `uploads/`; defaults to the project root. In Docker, often `/data` with a mounted volume. |
+| `INVOICE_COLLECT_HOST` | Uvicorn bind address (default `0.0.0.0` in the image). |
+| `INVOICE_COLLECT_PORT` | Listen port (default `8088` in the image). |
+| `INVOICE_COLLECT_LLM_BASE_URL` | Optional. Runtime override for `llm.base_url` in `config/models.yml`. |
+| `INVOICE_COLLECT_LLM_API_KEY` | Optional. Runtime override for `llm.api_key`. |
+| `INVOICE_COLLECT_LLM_MODEL` | Optional. Runtime override for `llm.model`. |
+| `INVOICE_COLLECT_LLM_TIMEOUT` | Optional. Runtime override for `llm.timeout` (seconds, integer). |
+| `INVOICE_COLLECT_NUEXTRACT_HOST` | Optional. Runtime override for `nuextract.host`. |
+| `INVOICE_COLLECT_NUEXTRACT_PORT` | Optional. Runtime override for `nuextract.port`. |
+| `INVOICE_COLLECT_NUEXTRACT_TIMEOUT` | Optional. Runtime override for `nuextract.timeout` (seconds, integer). |
+
+### Example command
+
+```bash
+docker run -d --name invoice-collect -p 8088:8088 \
+  -v /your/data/path:/data \
+  -e INVOICE_COLLECT_DATA_DIR=/data \
+  -e INVOICE_COLLECT_LLM_BASE_URL=your-llm-base-url \
+  -e INVOICE_COLLECT_LLM_MODEL=your-model-name \
+  -e INVOICE_COLLECT_LLM_API_KEY=your-api-key \
+  -e INVOICE_COLLECT_NUEXTRACT_HOST=your-nuextract-host \
+  -e INVOICE_COLLECT_NUEXTRACT_PORT=your-nuextract-port \
+  kyriegan1007/invoice-collect:latest
+```
+
+Open `http://your-service-ip:8088/` in your browser.
 
 ## Feature deep-dive
 
