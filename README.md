@@ -1,313 +1,138 @@
-# Invoice Collect / 发票归集系统
+# Invoice Collect / 发票归集系统 🧾
 
-**Language / 语言:** [English](#english) | [中文](#zh)
+[Language: English | [中文](#zh)]  
+*(Note: 建议后续补充英文版，当前以中文版为主)*
+
+一款全栈发票管理系统，支持发票自动提取、智能分类、差旅/会议自动聚类。
+
+License
+Python Version
+FastAPI
 
 ---
 
-## English
+## 📖 简介 (Introduction)
 
-<a id="english"></a>
+**核心痛点解决**：报销贴票、整理发票是一项繁琐的工作。本项目旨在通过 AI 技术与规则引擎，实现发票的自动化结构提取，并根据业务逻辑（如出差行程、会议批次）自动将发票聚类归集，极大地降低人工整理的成本。
 
-### Overview
+## ✨ 核心特性 (Key Features)
 
-A full-stack web app for uploading invoices, extracting structured fields (via a NuExtract-compatible HTTP service), automatically classifying them into expense categories, and grouping related invoices (travel loops, meeting batches). You can adjust results by dragging invoices in the UI.
+- 🧠 **双阶提取**：结合 NuExtract 与 OCR 降级方案（RapidOCR/Tesseract/EasyOCR），精准识别各类发票字段。
+- ✈️ **差旅闭环**：基于城市与时间链条，自动将车票、机票、酒店、打车等发票归集为一次“差旅”。
+- 📅 **智能聚类**：利用启发式算法（同一销售方+同一天）与 LLM 识别会议等批量发票。
+- 🖱️ **人工干预**：支持在 UI 上通过拖拽调整归集结果，满足复杂或异常的报销场景。
 
-### Features
+## 📸 界面展示 (Showcase / Demo)
 
-- **Categories** (see `config/categories.yml`): **travel**, **meeting**, **material**, **other**. The first three are *groupable*; **other** is not.
-- **Travel**: Uses `config/travel.yml` → `home_city` as the reference for closed-loop trips; detects inter-city transport chains and closed loops; attaches hotels, taxis, etc. in the time window to the same trip group.
-- **Meeting**: Heuristic grouping (same seller + same calendar day), optionally refined by LLM when multiple invoices exist.
-- **Material**: Classified like other categories; automatic trip/meeting algorithms do not apply—use manual groups or ungrouped as needed.
-- **Extraction (NuExtract path)**: Two-stage flow driven by `config/nuextract_templates.json`: (1) classify invoice type from the `invoice_type` list, (2) extract with the matching JSON template (e.g. regular invoice, railway e-ticket, air itinerary, train reimbursement slip). Taxi, ride-hailing, and hotel types still use built-in Python templates (single-step).
-- **Fallback**: `extraction` in `config/models.yml` — `provider` `nuextract` / `ocr_fallback` / `auto`; optional `use_llm_on_fallback` when local OCR path needs LLM help; `ocr.engine` (`rapidocr_onnx`, `tesseract`, `easyocr`), `pdf_max_pages`, `min_text_chars`.
-- **Classification pipeline**: Invoice subcategory (when present) → YAML rules (`config/rules.yml`) → LLM fallback → default **other**.
+### 1. 架构概览
+![项目架构图](./assets/system_structure_ch.webp)
 
-### Tech stack
 
-- Backend: FastAPI, SQLAlchemy 2 (async) + SQLite (`invoice_collect.db`)
-- Frontend: Jinja2 templates, static HTML/CSS/JS
-- AI: OpenAI-compatible Chat Completions API (`config/models.yml` → `llm`); NuExtract client in root `nuextract.py` (`/api/v1/nuextract/` upload API)
+### 2. 主界面与发票上传
+![主界面](./assets/main.png)
 
-### Project layout
 
-| Path | Role |
-|------|------|
-| `main.py` | App entry, static mounts, CORS, logging bootstrap |
-| `nuextract.py` | Async HTTP client for NuExtract service |
-| `app/routers/` | `invoices`, `collections`, `config` API |
-| `app/services/` | `extractor`, `fallback_extract`, `classifier`, `grouper`, `llm_client`, `progress`, `station_city_map` |
-| `config/categories.yml` | Category ids, names, descriptions, `groupable` |
-| `config/rules.yml` | Ordered rules (`priority`, `conditions`, `target_category`) |
-| `config/models.yml` | `llm`, `nuextract`, `extraction` |
-| `config/nuextract_templates.json` | Invoice types + per-type extraction schemas for the two-stage NuExtract flow |
-| `config/travel.yml` | Travel settings, e.g. `home_city` for loop detection |
-| `requirements.txt` | Runtime dependencies (API + default OCR fallback stack) |
-| `templates/`, `static/` | Web UI |
-| `uploads/` | Stored upload files |
-| `Dockerfile`, `docker-compose.yml` | Container image and one-command local stack |
+### 3. 智能分组与拖拽交互
+![交互](./assets/pull_and_drag.gif)
 
-### Configuration
 
-- **`config/models.yml`**
-  - `llm`: `base_url`, `api_key`, `model`, `timeout` for classification / meeting grouping.
-  - `nuextract`: `host`, `port`, `timeout` for field extraction.
-  - `extraction`: `provider` — `nuextract` (remote only), `ocr_fallback` (local only), `auto` (try NuExtract then OCR). `use_llm_on_fallback` toggles LLM use on the fallback path. `ocr.engine` defaults to `rapidocr_onnx` (`rapidocr_onnx`, `tesseract`, `easyocr`), with `pdf_max_pages` and `min_text_chars`.
-  - The config API merges on save so existing keys (e.g. `extraction`) are preserved; the in-app editor may only expose part of the file—edit YAML directly for full control.
-- **`config/nuextract_templates.json`**: Extend or adjust supported `invoice_type` values and template objects; must stay consistent with extractor mappings in `app/services/extractor.py`.
-- **`config/travel.yml`**: `home_city` — user’s base city for travel closed-loop logic (also `GET`/`PUT` `/api/config/travel`).
-- **`config/categories.yml`**, **`config/rules.yml`**: As above.
+## 🚀 快速开始 (Quick Start)
 
-Do not commit real API keys; use placeholders in shared repos.
+### 前置要求 (Prerequisites)
 
-### Environment variables
+- **Python** >= 3.9
+- **API Key** (可选，推荐)：配置兼容 OpenAI 的大模型 API，用于更精准的分类和会议分组。
+- **NuExtract** (可选)：如需强大的结构化提取能力，需自备 NuExtract 服务；否则系统将自动降级使用本地 OCR。
 
-| Variable | Meaning |
-|----------|---------|
-| `INVOICE_COLLECT_LOG_LEVEL` | Python log level, default `INFO`. Use `DEBUG` for per-invoice details and raw LLM snippets. |
-| `INVOICE_COLLECT_DATA_DIR` | Optional. Directory for `invoice_collect.db` and the `uploads/` subtree. Defaults to the project root (same layout as a local clone). Set to e.g. `/data` in Docker and mount a volume there. |
-| `INVOICE_COLLECT_HOST` | Bind address for Uvicorn (Docker image default `0.0.0.0`). |
-| `INVOICE_COLLECT_PORT` | Listen port (Docker image default `8088`). |
-| `INVOICE_COLLECT_LLM_BASE_URL` | Optional. Runtime override for `llm.base_url` in `config/models.yml`. |
-| `INVOICE_COLLECT_LLM_API_KEY` | Optional. Runtime override for `llm.api_key`. |
-| `INVOICE_COLLECT_LLM_MODEL` | Optional. Runtime override for `llm.model`. |
-| `INVOICE_COLLECT_LLM_TIMEOUT` | Optional. Runtime override for `llm.timeout` (seconds, integer). |
-| `INVOICE_COLLECT_NUEXTRACT_HOST` | Optional. Runtime override for `nuextract.host`. |
-| `INVOICE_COLLECT_NUEXTRACT_PORT` | Optional. Runtime override for `nuextract.port`. |
-| `INVOICE_COLLECT_NUEXTRACT_TIMEOUT` | Optional. Runtime override for `nuextract.timeout` (seconds, integer). |
-
-**`models.yml` vs env:** Classification, NuExtract calls, and extraction routing read a **merged** view: load `config/models.yml`, then apply any of the `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*` variables above (env wins when set). The web/API editor `GET /api/config/models` still reflects the **file on disk** only; use env for secrets in Compose/Kubernetes without baking keys into the image.
-
-### Install and run
+### 安装与运行 (Installation)
 
 ```bash
+# 1. 克隆项目
+git clone https://github.com/Gaaaaam/invoice_collect.git
 cd invoice_collect
+
+# 2. 安装依赖
 pip install -r requirements.txt
+
+# 3. 配置文件准备
+# 项目自带默认配置，您可以根据需要修改 config 目录下的文件，如 models.yml, travel.yml 等。
+# 重点：配置 config/models.yml 中的大模型与提取服务参数，或者稍后在 UI 中配置。
+
+# 4. 启动服务
 python main.py
+# 生产环境建议使用: uvicorn main:app --host 127.0.0.1 --port 8088
 ```
 
-**OCR fallback notes:** `rapidocr_onnx` + `onnxruntime` work with `pip` only (models download on first run). **Tesseract** requires a system `tesseract` binary in addition to `pytesseract`/`pillow`. **EasyOCR** pulls large PyTorch-based dependencies (commented in `requirements.txt`).
+访问 `http://127.0.0.1:8088/` 即可体验。
 
-Default bind: `127.0.0.1:8088` with `reload=True` (see `main.py`). For production, prefer:
+> **Docker 部署**：项目同样支持 Docker 与 Docker Compose 一键部署，详情可参考旧版文档的 Docker 章节。
 
-```bash
-uvicorn main:app --host 127.0.0.1 --port 8088
+## 💡 核心逻辑深度解析 (Feature Deep-dive)
+
+本项目不仅提供了基础设施，更内置了贴合真实报销场景的业务逻辑。
+
+### 1. 差旅闭环检测逻辑
+
+差旅归集不只是简单的时间聚合，系统会结合 `config/travel.yml` 中配置的 `home_city`（常住/出发参照城市）进行**行程链条推导**：
+
+- 当识别到离开 `home_city` 的交通票据（如高铁、机票），即标记为一次差旅的开始。
+- 后续的交通票据将作为行程节点串联。
+- 当识别到返回 `home_city` 的票据，则视为形成**“闭环”**。
+- 系统会将这一时间窗口内的住宿费、市内交通费（打车）自动挂载到该闭环行程组中。
+
+### 2. NuExtract 双阶提取模板
+
+为了应对中国繁杂的票据种类，系统设计了基于 `config/nuextract_templates.json` 的双阶提取流程：
+
+1. **类型判别**：首先判断发票的具体类型（如铁路电子客票、航空行程单等）。
+2. **定向抽取**：根据判断出的类型，应用 JSON 模板中对应的高度定制化 schema，从而最大化发挥大模型结构化提取的准确度。并且这种设计极具扩展性，只需修改 JSON 文件即可轻松支持新票种。
+
+## ⚙️ 配置指南 (Configuration)
+
+系统的大部分行为由 `config/` 目录下的 YAML/JSON 文件控制。
+
+
+| 配置文件                       | 作用说明                                     |
+| -------------------------- | ---------------------------------------- |
+| `models.yml`               | 配置 LLM 接口地址与密钥、NuExtract 服务地址、OCR 引擎选择等。 |
+| `rules.yml`                | 核心分类规则引擎配置。定义“字段包含某字符则归入某类”的规则树。         |
+| `categories.yml`           | 定义报销大类（如差旅费、会议费、材料费等）及其是否允许分组。           |
+| `travel.yml`               | 差旅特定配置，如核心的 `home_city` 变量。              |
+| `nuextract_templates.json` | 定义各类型发票的结构化提取 Schema。                    |
+
+
+### 配置示例：自定义分类规则 (`rules.yml`)
+
+您可以轻松通过规则引擎将特定发票划入特定类别，以下是一个典型的配置示例：
+
+```yaml
+- id: rule_hotel_to_travel
+  name: 住宿费归差旅费
+  priority: 20
+  conditions:
+  - field: invoice_type
+    match_type: contains
+    value: 住宿
+  - field: seller_name
+    match_type: regex
+    value: (酒店|宾馆|旅馆|民宿|客栈)
+  condition_logic: OR
+  target_category: travel
 ```
 
-Open `http://127.0.0.1:8088/`. Interactive API docs: `http://127.0.0.1:8088/docs`.
+## 🛠 技术栈 (Tech Stack)
 
-### Docker
+- **后端**: FastAPI, SQLAlchemy 2 (async), SQLite
+- **前端**: Jinja2, HTML5 / Vanilla JS / CSS3
+- **AI / 核心能力**: OpenAI-compatible LLM 接口, NuExtract (异步 HTTP 客户端), RapidOCR/Tesseract/EasyOCR
 
-Prerequisites: [Docker](https://docs.docker.com/get-docker/) (and optionally Docker Compose).
+## 🗺 项目路线图 (Roadmap)
 
-When you distribute a ready-made image, deployers only need to pull and run it.
+- 支持更多类型的电子票据（如行程单 PDF 直接解析）。
+- 增加报销单自动生成导出功能（Excel/PDF）。
+- 对接更多国产 LLM 模型（如通义千问、DeepSeek）以提供开箱即用的体验优化。
+- *(规划中)* 完善移动端浏览体验。
 
-```bash
-docker pull kyriegan1007/invoice-collect:1.0.0
-```
+## 📄 开源协议 (License)
 
-Then run (persist DB/uploads on a named volume; map host port `8088`):
-
-```bash
-docker run -d --name invoice-collect -p 8088:8088 \
-  -v invoice_collect_data:/data \
-  -e INVOICE_COLLECT_DATA_DIR=/data \
-  kyriegan1007/invoice-collect:1.0.0
-```
-
-Then open `http://localhost:8088/`. The app stores `invoice_collect.db` and uploaded files under `/data` inside the container when `INVOICE_COLLECT_DATA_DIR=/data`.
-
-The image includes `config/models.yml` (often placeholders). **LLM and NuExtract are not bundled:** point them at real services via **environment variables** (see table above), a **bind-mounted** `config/`, or **in-app** settings (`PUT /api/config/models` writes the file inside the container). If NuExtract is unavailable, set `extraction.provider` to `ocr_fallback` (or keep `auto`) so local OCR can still extract text; LLM remains optional when rules cover your cases.
-
-**Compose** (`docker-compose.yml` defaults to image mode and reads `.env`):
-
-```bash
-docker compose up -d
-```
-
-Create `.env` from `.env.example` and set at least:
-- `INVOICE_COLLECT_IMAGE=kyriegan1007/invoice-collect:1.0.0`
-- `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*` as needed (non-empty values override `models.yml` at runtime)
-
-NuExtract / LLM endpoints in `models.yml` (or env overrides) must be reachable from the container (use `host.docker.internal` on Docker Desktop if the service runs on the host, or a LAN URL). To override config without rebuilding, bind-mount `config`:
-
-```bash
-docker run -d -p 8088:8088 -v invoice_collect_data:/data -e INVOICE_COLLECT_DATA_DIR=/data \
-  -v "$(pwd)/config:/app/config:ro" kyriegan1007/invoice-collect:1.0.0
-```
-
-(On Windows PowerShell, replace `$(pwd)` with `${PWD}` or an absolute path.)
-
-### Collection flow and main APIs
-
-1. Upload: `POST /api/invoices/upload` → extraction runs → `extract_status=done` on success, `error` if both NuExtract and OCR fallback fail. `POST /api/invoices/{id}/re-extract` to retry one invoice.
-2. Start collection: `POST /api/collections/process` → SSE `GET /api/collections/stream/{task_id}`; `POST /api/collections/cancel/{task_id}` to cancel.
-   - Archived invoices in the UI live in browser `localStorage` and are sent as `exclude_invoice_ids`, so they are skipped in this run.
-3. Board: `GET /api/collections/result`.
-4. Manual fixes: `PATCH /api/collections/move`, `PATCH /api/collections/move/batch`, group CRUD under `/api/collections/groups/*`.
-5. Invoices: `GET/DELETE /api/invoices/{id}`, `GET /api/invoices/{id}/file`, `POST /api/invoices/batch-delete`, list `GET /api/invoices`.
-6. Config: `/api/config/categories`, `/rules`, `/models`, `/travel` (`GET`/`PUT` as applicable).
-
-### Logging (troubleshooting accuracy)
-
-On `INFO`, logs include: collection task options and summaries; per-invoice classification path (subcategory / rule id / LLM); travel loop counts; meeting heuristic vs LLM adoption. Use `DEBUG` for richer context.
-
-### Deployment notes
-
-- For Docker, use a volume on `INVOICE_COLLECT_DATA_DIR` (see **Docker** above). Otherwise persist `invoice_collect.db` and `uploads/` via mounts; SQLite is not designed for multi-instance writes.
-- Ensure the app host can reach the NuExtract endpoint configured in `models.yml` (client uses `/api/v1/nuextract/`).
-- For production, disable reload and run behind a process manager with explicit host/port, CORS policy, and secret injection.
-- Keep real keys out of VCS; use placeholders in config files and inject secrets during deployment.
-
----
-
-<a id="zh"></a>
-
-## 中文
-
-### 项目简介
-
-全栈发票归集应用：上传发票、通过兼容 NuExtract 的 HTTP 服务做结构化字段抽取，再按规则与可选 LLM 归入费用大类，并对差旅、会议等做自动分组；支持在界面中拖拽修正归属。
-
-### 功能说明
-
-- **费用大类**（以 `config/categories.yml` 为准）：**差旅费**（travel）、**会议费**（meeting）、**材料费**（material）、**其他费用**（other）。前三种默认可分组，**其他费用**不分组。
-- **差旅费**：读取 `config/travel.yml` 中的 **`home_city`**（常住/出发参照城市），据此做行程链与闭环检测，并把时间窗口内的住宿、打车等并入同一行程组。
-- **会议费**：默认按「同一销售方 + 同一天」启发式分组；多张票时可由 LLM 细化分组（需配置 LLM）。
-- **材料费**：与其他大类一样参与自动分类；当前归集任务不包含类似差旅/会议的专用自动分组逻辑，可使用未分组或手动建组。
-- **抽取（NuExtract 路径）**：由 `config/nuextract_templates.json` 驱动的**两阶段**流程——先用 `invoice_type` 列表判别票种，再按票种选用对应 JSON 模板做字段抽取（如电子普票、铁路电子客票、航空行程单、火车票报销凭证等）。出租车/网约车/酒店等仍走内置 Python 模板（单阶段）。
-- **保底抽取**：`config/models.yml` 的 **`extraction`** 段——`provider` 可选 `nuextract` / `ocr_fallback` / `auto`；**`use_llm_on_fallback`** 控制本地保底路径是否再调用 LLM；`ocr` 含 `engine`、`pdf_max_pages`、`min_text_chars`。
-- **分类顺序**：`invoice_subcategory`（若有）→ `config/rules.yml` 规则 → LLM 兜底 → 默认归入 **other**。
-
-### 技术栈
-
-- 后端：FastAPI、SQLAlchemy 2 异步 + SQLite（`invoice_collect.db`），开发环境启用 CORS（`main.py`）
-- 前端：Jinja2、`static/` 下原生 JS/CSS
-- 大模型：兼容 OpenAI 的 Chat Completions API（`config/models.yml` 的 `llm` 段）
-- NuExtract：根目录 `nuextract.py` 异步客户端，请求服务端 `/api/v1/nuextract/`
-
-### 目录结构
-
-| 路径 | 说明 |
-|------|------|
-| `main.py` | 应用入口、静态资源挂载、CORS、日志初始化 |
-| `nuextract.py` | NuExtract HTTP 客户端 |
-| `app/routers/` | 发票、归集、配置等 API |
-| `app/services/` | 抽取/保底抽取、分类、分组、LLM、进度推送、站点城市映射 |
-| `config/categories.yml` | 大类 id、名称、描述、是否可分组 |
-| `config/rules.yml` | 规则优先级、匹配条件、`target_category` |
-| `config/models.yml` | LLM、NuExtract、抽取策略与 OCR 参数 |
-| `config/nuextract_templates.json` | 票种列表与各票种抽取模板（两阶段 NuExtract） |
-| `config/travel.yml` | 差旅归集参数（如 `home_city`） |
-| `requirements.txt` | 运行依赖（含默认 OCR 保底栈） |
-| `templates/`、`static/` | 网页界面 |
-| `uploads/` | 上传文件存储 |
-| `Dockerfile`、`docker-compose.yml` | 容器镜像与一键启动 |
-
-### 配置说明
-
-- **`config/models.yml`**：`llm`（分类与会议分组）、`nuextract`（抽取服务地址）、`extraction`（`provider`、`use_llm_on_fallback`、`ocr` 等）。保存时 API 会与磁盘已有内容合并，避免误删未在界面编辑的字段；完整修改可直接编辑 YAML。
-- **`config/nuextract_templates.json`**：可扩展 `invoice_type` 与各模板结构；需与 `app/services/extractor.py` 中的类型映射保持一致。
-- **`config/travel.yml`**：`home_city`（闭环判断参照城市）；也可通过 **`GET` / `PUT` `/api/config/travel`** 读写。
-- **`config/categories.yml`**、**`config/rules.yml`**：同上表。
-
-请勿将真实 API 密钥提交到公共仓库。
-
-### 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `INVOICE_COLLECT_LOG_LEVEL` | 日志级别，默认 `INFO`；设为 `DEBUG` 可查看单张发票上下文、LLM 原始片段等 |
-| `INVOICE_COLLECT_DATA_DIR` | 可选。存放 `invoice_collect.db` 与 `uploads/` 的目录；默认与源码根目录一致。Docker 中常设为 `/data` 并挂载数据卷。 |
-| `INVOICE_COLLECT_HOST` | Uvicorn 监听地址（镜像内默认 `0.0.0.0`）。 |
-| `INVOICE_COLLECT_PORT` | 监听端口（镜像内默认 `8088`）。 |
-| `INVOICE_COLLECT_LLM_BASE_URL` | 可选。运行时覆盖 `config/models.yml` 中的 `llm.base_url`。 |
-| `INVOICE_COLLECT_LLM_API_KEY` | 可选。运行时覆盖 `llm.api_key`。 |
-| `INVOICE_COLLECT_LLM_MODEL` | 可选。运行时覆盖 `llm.model`。 |
-| `INVOICE_COLLECT_LLM_TIMEOUT` | 可选。运行时覆盖 `llm.timeout`（秒，整数）。 |
-| `INVOICE_COLLECT_NUEXTRACT_HOST` | 可选。运行时覆盖 `nuextract.host`。 |
-| `INVOICE_COLLECT_NUEXTRACT_PORT` | 可选。运行时覆盖 `nuextract.port`。 |
-| `INVOICE_COLLECT_NUEXTRACT_TIMEOUT` | 可选。运行时覆盖 `nuextract.timeout`（秒，整数）。 |
-
-**`models.yml` 与环境变量：** 抽取与分类在运行时会读取「磁盘上的 `config/models.yml` + 上述 `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*` 环境变量」的合并结果（**环境变量优先**）。`GET /api/config/models` 仍只反映**磁盘文件**（界面保存的内容），便于不把密钥写进仓库时用 Compose/K8s 注入真实值。
-
-### 安装与运行
-
-```bash
-cd invoice_collect
-pip install -r requirements.txt
-python main.py
-```
-
-**OCR 说明：** 默认引擎 `rapidocr_onnx` 可通过 pip 与首次运行拉取的模型工作；**Tesseract** 需单独安装系统程序，并安装 `pytesseract`/`pillow`；**EasyOCR** 依赖较重（见 `requirements.txt` 注释）。
-
-默认监听 `127.0.0.1:8088` 且开启热重载（见 `main.py`）。生产环境建议使用：
-
-```bash
-uvicorn main:app --host 127.0.0.1 --port 8088
-```
-
-浏览器访问 `http://127.0.0.1:8088/`；接口文档：`http://127.0.0.1:8088/docs`。
-
-### Docker（容器部署）
-
-需已安装 [Docker](https://docs.docker.com/get-docker/)（可选 Docker Compose）。
-
-如果你是把现成镜像交付给部署方，部署方只需要拉取并运行，无需再本地构建。
-
-```bash
-docker pull kyriegan1007/invoice-collect:1.0.0
-```
-
-**运行**（命名卷持久化数据库与上传文件，宿主机端口 8088；整段可复制为一行）：
-
-```bash
-docker run -d --name invoice-collect -p 8088:8088 -v invoice_collect_data:/data -e INVOICE_COLLECT_DATA_DIR=/data kyriegan1007/invoice-collect:1.0.0
-```
-
-浏览器访问 `http://localhost:8088/`。设置 `INVOICE_COLLECT_DATA_DIR=/data` 时，容器内数据库与上传目录均在 `/data` 下。
-
-镜像内带有 `config/models.yml`（多为占位符）。**镜像不包含 LLM 与 NuExtract 服务**，需通过**环境变量**（见上文环境变量表）、**挂载本机 `config/`**，或在界面里保存 **`PUT /api/config/models`**（写入容器内文件）指向真实地址。若无 NuExtract，可将 `extraction.provider` 设为 `ocr_fallback`（或保持 `auto`）以走本地 OCR；若规则已能覆盖分类场景，对 LLM 的依赖也会降低。
-
-**Compose**（`docker-compose.yml` 已按镜像部署设计，并默认读取同目录 `.env`）：
-
-```bash
-docker compose up -d
-```
-
-可复制 `.env.example` 为 `.env`，至少配置：
-- `INVOICE_COLLECT_IMAGE=kyriegan1007/invoice-collect:1.0.0`
-- 按需配置 `INVOICE_COLLECT_LLM_*` / `INVOICE_COLLECT_NUEXTRACT_*`（非空值会在运行时覆盖 `models.yml`）
-
-容器内需能访问 `config/models.yml` 里配置的 NuExtract / LLM 地址（服务在宿主机上时，Docker Desktop 可用 `host.docker.internal`）。不重建镜像即可换配置时，可把本机 `config` 挂载进容器，例如：
-
-```bash
-docker run -d -p 8088:8088 -v invoice_collect_data:/data -e INVOICE_COLLECT_DATA_DIR=/data \
-  -v F:/项目存档/invoice_collect/config:/app/config:ro kyriegan1007/invoice-collect:1.0.0
-```
-
-（路径按你的机器修改；`:ro` 表示只读，若要在界面里改配置可去掉 `:ro`。）
-
-### 归集流程与主要 API
-
-1. **上传**：`POST /api/invoices/upload` → 抽取完成后 `extract_status=done`；远程与本地均失败则为 `error`。单张重抽：`POST /api/invoices/{invoice_id}/re-extract`。
-2. **归集**：`POST /api/collections/process`，进度流 `GET /api/collections/stream/{task_id}`；取消：`POST /api/collections/cancel/{task_id}`。
-   - 前端「历史归档」存于浏览器 `localStorage`，通过 `exclude_invoice_ids` 传给后端，归集时排除这些发票。
-3. **看板**：`GET /api/collections/result`。
-4. **手动调整**：`PATCH /api/collections/move`、`PATCH /api/collections/move/batch`、`/api/collections/groups/*` 管理分组。
-5. **发票**：列表 `GET /api/invoices`，详情/删除 `GET`/`DELETE /api/invoices/{id}`，原文件 `GET /api/invoices/{id}/file`，批量删除 `POST /api/invoices/batch-delete`。
-6. **配置**：`/api/config/categories`、`/rules`、`/models`、`/travel`（按需 `GET`/`PUT`）。
-
-### 日志与排错（分类/分组不准时）
-
-在 **INFO** 下可看到：归集任务参数与分类汇总、每张发票的分类路径（子类型 / 命中规则 / LLM）、差旅组数量与闭环数、会议是否采用 LLM 等。**DEBUG** 下信息更细，便于对照规则与抽取字段。
-
-### 部署注意事项
-
-- 使用 Docker 时给 `INVOICE_COLLECT_DATA_DIR` 挂数据卷（见上文 **Docker**）。否则请将 `invoice_collect.db` 与 `uploads/` 持久化挂载；SQLite 不适合多实例并发写入。
-- 需确保应用节点可访问 `models.yml` 中配置的 NuExtract 服务（客户端路径为 `/api/v1/nuextract/`）。
-- 生产环境应关闭热重载，使用进程管理启动，并按需收紧 CORS、注入密钥。
-- `models.yml` 中密钥请使用占位符，真实值通过环境/密钥服务注入，避免入库与泄露。
-
----
-
-[↑ Back to top / 返回顶部](#invoice-collect--发票归集系统)
+[Apache 2.0 License](LICENSE)
