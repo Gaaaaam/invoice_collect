@@ -1,96 +1,131 @@
 {
-    "invoice_type": [
-        "电子发票（普通发票）",
-        "电子发票（铁路电子客票）",
-        "航空运输电子客票行程单",
-        "火车票报销凭证"
-    ],
-    "regular_invoice_template": {
-        "发票号码": "verbatim-string",
-        "开票日期": "date-time",
-        "购买方信息": {
-            "名称": "string",
-            "统一社会信用代码/纳税人识别号": "verbatim-string"
-        },
-        "销售方信息": {
-            "名称": "string",
-            "统一社会信用代码/纳税人识别号": "verbatim-string"
-        },
-        "项目信息": [
-            {
-                "项目名称": "string",
-                "规格型号": "string",
-                "单位": "string",
-                "数量": "integer",
-                "单价": "number",
-                "金额": "number",
-                "税率/征收率": "string",
-                "税额": "number"
+    "templates": [
+        {
+            "id": "regular_invoice_template",
+            "invoice_type": "电子发票（普通发票）",
+            "schema": {
+                "发票号码": "verbatim-string",
+                "开票日期": "date-time",
+                "购买方信息": {
+                    "名称": "string",
+                    "统一社会信用代码/纳税人识别号": "verbatim-string"
+                },
+                "销售方信息": {
+                    "名称": "string",
+                    "统一社会信用代码/纳税人识别号": "verbatim-string"
+                },
+                "项目信息": [
+                    {
+                        "项目名称": "string",
+                        "规格型号": "string",
+                        "单位": "string",
+                        "数量": "integer",
+                        "单价": "number",
+                        "金额": "number",
+                        "税率/征收率": "string",
+                        "税额": "number"
+                    }
+                ],
+                "合计金额": "number",
+                "合计税额": "number",
+                "出行信息": [
+                    {
+                        "出行人": "string",
+                        "有效身份证件号": "string",
+                        "出发日期": "date-time",
+                        "出发地": "string",
+                        "到达地": "string",
+                        "等级": "string",
+                        "交通工具等级": "string"
+                    }
+                ],
+                "价税合计": {
+                    "大写": "string",
+                    "小写": "number"
+                },
+                "备注中的日期": "date-time",
+                "备注出发地": "string",
+                "备注目的地": "string",
+                "出发城市": "string",
+                "到达城市": "string",
+                "开票人": "string"
             }
-        ],
-        "合计金额": "number",
-        "合计税额": "number",
-        "出行信息": [
-            {
-                "出行人": "string",
-                "有效身份证件号": "string",
+        },
+        {
+            "id": "railway_electronic_ticket_template",
+            "invoice_type": "电子发票（铁路电子客票）",
+            "schema": {
+                "发票号码": "verbatim-string",
+                "开票日期": "date-time",
+                "车次": "verbatim-string",
+                "出发站": "verbatim-string",
+                "到达站": "verbatim-string",
                 "出发日期": "date-time",
-                "出发地": "string",
-                "到达地": "string",
-                "等级": "string",
-                "交通工具等级": "string"
+                "出发时间": "verbatim-string",
+                "座位等级": "verbatim-string",
+                "车厢座位号": "verbatim-string",
+                "票价": "verbatim-string",
+                "乘客姓名": "verbatim-string",
+                "电子客票号": "verbatim-string",
+                "购买方信息": {
+                    "名称": "string",
+                    "统一社会信用代码/纳税人识别号": "verbatim-string"
+                }
             }
-        ],
-        "价税合计": {
-            "大写": "string",
-            "小写": "number"
         },
-        "备注中的日期": "date-time",
-        "备注出发地": "string",
-        "备注目的地": "string",
-        "出发城市": "string",
-        "到达城市": "string",
-        "开票人": "string"
-    },
-    "railway_electronic_ticket_template": {
-        "发票号码": "verbatim-string",
-        "开票日期": "date-time",
-        "车次": "verbatim-string",
-        "出发站": "verbatim-string",
-        "到达站": "verbatim-string",
-        "出发日期": "date-time",
-        "出发时间": "verbatim-string",
-        "座位等级": "verbatim-string",
-        "车厢座位号": "verbatim-string",
-        "票价": "verbatim-string",
-        "乘客姓名": "verbatim-string",
-        "电子客票号": "verbatim-string",
-        "购买方信息": {
-            "名称": "string",
-            "统一社会信用代码/纳税人识别号": "verbatim-string"
+        {
+            "id": "air_transportation_electronic_ticket_itinerary",
+            "invoice_type": "航空运输电子客票行程单",
+            "schema": {
+                "旅客姓名": "string",
+                "航班号(FLIGHT)": "string",
+                "座位等级(CLASS)": [
+                    "F",
+                    "A",
+                    "C",
+                    "D",
+                    "Y",
+                    "S",
+                    "B",
+                    "H",
+                    "K",
+                    "L",
+                    "M",
+                    "Q",
+                    "T",
+                    "X",
+                    "U",
+                    "E",
+                    "W",
+                    "R",
+                    "O",
+                    "Z",
+                    "V",
+                    "G"
+                ],
+                "航班日期(DATE)": "date-time",
+                "出发地点(自FROM)": "string",
+                "到达地点(至TO)": "string",
+                "合计(TOTAL)": "number",
+                "保险费(INSURANCE)": "number",
+                "填开单位(ISSUED BY)": "string"
+            }
+        },
+        {
+            "id": "train_physical_ticket",
+            "invoice_type": "火车票报销凭证",
+            "schema": {
+                "票号": "verbatim-string",
+                "车次": "verbatim-string",
+                "出发站": "verbatim-string",
+                "到达站": "verbatim-string",
+                "出发日期": "date-time",
+                "出发时间": "verbatim-string",
+                "座位等级": "verbatim-string",
+                "车厢座位号": "verbatim-string",
+                "票价": "verbatim-string",
+                "乘客姓名": "verbatim-string"
+            }
         }
-    },
-    "air_transportation_electronic_ticket_itinerary":{
-        "旅客姓名":"string",
-        "航班号(FLIGHT)":"string",
-        "座位等级(CLASS)":["F","A","C","D","Y","S","B","H","K","L","M","Q","T","X","U","E","W","R","O","Z","V","G"],
-        "航班日期(DATE)":"date-time",
-        "出发地点(自FROM)":"string",
-        "到达地点(至TO)":"string",
-        "合计(TOTAL)":"number",
-        "保险费(INSURANCE)":"number",
-        "填开单位(ISSUED BY)":"string"
-    },
-    "train_physical_ticket":{
-        "票号":"verbatim-string",
-        "车次":"verbatim-string",
-        "出发站":"verbatim-string",
-        "到达站":"verbatim-string",
-        "出发日期":"date-time",
-        "出发时间":"verbatim-string",
-        "座位等级":"verbatim-string",
-        "车厢座位号":"verbatim-string",
-        "票价":"verbatim-string",
-        "乘客姓名":"verbatim-string"
-    }
+    ]
 }
