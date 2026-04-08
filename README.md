@@ -1,13 +1,8 @@
 # Invoice Collect / 发票归集系统 🧾
 
-[Language: English | [中文](#zh)]  
-*(Note: 建议后续补充英文版，当前以中文版为主)*
+**语言 / Language**: [中文](./README.md) · [English](./README.en.md)
 
 一款全栈发票管理系统，支持发票自动提取、智能分类、差旅/会议自动聚类。
-
-License
-Python Version
-FastAPI
 
 ---
 
