@@ -733,6 +733,17 @@ body {
 #configModal .modal.modal--config .modal-body {
   min-height: 0;
 }
+/* 系统配置：标签栏在内容区滚动时固定在标题下方，便于切换 Tab */
+#configModal .modal.modal--config .tabs {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: #fff;
+  margin-left: -20px;
+  margin-right: -20px;
+  padding-left: 20px;
+  padding-right: 20px;
+}
 
 /* ─── Tabs ──────────────────────────────────────────────────────────────────── */
 .tabs {
@@ -759,6 +770,64 @@ body {
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
 
+/* ─── NuExtract 可视化模板编辑器 ─────────────────────────────────────────────── */
+.tpl-editor-wrap {
+  display: block;
+}
+.tpl-field-tree {
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+.tpl-field-node {
+  border-left: 2px solid #e5e7eb;
+  margin-left: 8px;
+  padding-left: 10px;
+  margin-bottom: 8px;
+}
+.tpl-field-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 220px 32px;
+  gap: 8px;
+  align-items: center;
+}
+.tpl-field-key,
+.tpl-field-type,
+.tpl-enum-input {
+  margin-bottom: 0;
+}
+.tpl-field-children {
+  margin-top: 8px;
+}
+.tpl-field-children-list {
+  margin-top: 6px;
+}
+.tpl-enum-editor {
+  margin-top: 8px;
+  padding: 8px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+.tpl-enum-item {
+  display: grid;
+  grid-template-columns: 1fr 32px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.tpl-btn {
+  margin-top: 6px;
+}
+.tpl-delete-btn {
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
 /* ─── Form Elements ─────────────────────────────────────────────────────────── */
 .form-group { margin-bottom: 14px; }
 .form-label {

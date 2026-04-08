@@ -9,6 +9,7 @@ const state = {
   categories: [],        // 费用大类配置
   rules: [],             // 分类规则
   modelsConfig: null,    // 模型服务配置
+  nuExtractTemplates: [],// 抽取模板配置
   sortableInstances: [], // SortableJS 实例引用（便于销毁重建）
   selectedInvoiceIds: new Set(), // 看板中多选的发票
   selectionAnchorId: null, // Shift 多选锚点
@@ -391,14 +392,39 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 function switchTab(activeId) {
   const modal = document.getElementById('configModal');
   if (!modal) return;
-  const order = ['tabCategories', 'tabRules', 'tabTravel', 'tabModels'];
   modal.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   modal.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   const pane = document.getElementById(activeId);
-  if (pane) pane.classList.add('active');
-  const idx = order.indexOf(activeId);
-  const buttons = modal.querySelectorAll('.tab-btn');
-  if (idx >= 0 && buttons[idx]) buttons[idx].classList.add('active');
+  if (!pane) return;
+  pane.classList.add('active');
+  const activeBtn = modal.querySelector(`.tab-btn[data-tab="${activeId}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
+}
+
+let _configModalUiBound = false;
+function bindConfigModalEvents() {
+  if (_configModalUiBound) return;
+  _configModalUiBound = true;
+  const modal = document.getElementById('configModal');
+  if (!modal) return;
+
+  modal.querySelectorAll('.tab-btn[data-tab]').forEach(btn => {
+    const tabId = btn.dataset.tab;
+    btn.onclick = null;
+    btn.addEventListener('click', () => switchTab(tabId));
+  });
+
+  const addTplBtn = document.getElementById('btnAddNuExtractTemplate');
+  if (addTplBtn) {
+    addTplBtn.onclick = null;
+    addTplBtn.addEventListener('click', addNuExtractTemplate);
+  }
+
+  const tplList = document.getElementById('nuextractTemplateList');
+  if (tplList) {
+    tplList.addEventListener('click', handleTemplateEditorClick);
+    tplList.addEventListener('change', handleTemplateEditorChange);
+  }
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
@@ -1827,22 +1853,26 @@ document.getElementById('btnConfig').addEventListener('click', async () => {
 });
 
 async function loadConfigData() {
-  const [cats, rules, travel, models] = await Promise.all([
+  const [cats, rules, travel, models, templates] = await Promise.all([
     api('GET', '/api/config/categories'),
     api('GET', '/api/config/rules'),
     api('GET', '/api/config/travel'),
     api('GET', '/api/config/models'),
+    api('GET', '/api/config/nuextract-templates'),
   ]);
 
   state.categories = cats.categories;
   state.rules = rules.rules;
   state.travelConfig = travel;
   state.modelsConfig = models;
+  const templateItems = Array.isArray(templates?.templates) ? templates.templates : [];
+  state.nuExtractTemplates = templateItems.map(normalizeNuExtractTemplateItem);
 
   renderCategoryEditor(cats.categories);
   renderRuleEditor(rules.rules);
   renderTravelEditor(travel);
   renderModelsEditor(models);
+  renderNuExtractTemplateEditor(state.nuExtractTemplates);
 }
 
 // ── Categories Editor ─────────────────────────────────────────────────────────
@@ -2008,6 +2038,402 @@ function renderModelsEditor(models) {
   document.getElementById('nuTimeout').value = models.nuextract?.timeout || 60;
 }
 
+// ── NuExtract Templates Editor ────────────────────────────────────────────────
+function createDefaultTemplateField() {
+  return {
+    key: '新字段',
+    kind: 'primitive',
+    primitiveType: 'string',
+    children: [],
+    enumValues: [],
+  };
+}
+
+function isPlainObject(v) {
+  return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function schemaToFieldTree(schema) {
+  if (!isPlainObject(schema)) return [];
+  return Object.entries(schema).map(([key, value]) => valueToFieldNode(key, value));
+}
+
+function valueToFieldNode(key, value) {
+  if (isPlainObject(value)) {
+    return {
+      key,
+      kind: 'object',
+      primitiveType: 'string',
+      children: schemaToFieldTree(value),
+      enumValues: [],
+    };
+  }
+  if (Array.isArray(value)) {
+    if (value.length && isPlainObject(value[0])) {
+      return {
+        key,
+        kind: 'array_object',
+        primitiveType: 'string',
+        children: schemaToFieldTree(value[0]),
+        enumValues: [],
+      };
+    }
+    return {
+      key,
+      kind: 'enum',
+      primitiveType: 'string',
+      children: [],
+      enumValues: value.map(v => String(v)),
+    };
+  }
+  return {
+    key,
+    kind: 'primitive',
+    primitiveType: typeof value === 'string' ? value : 'string',
+    children: [],
+    enumValues: [],
+  };
+}
+
+function fieldNodeToSchemaValue(node) {
+  if (!node) return 'string';
+  if (node.kind === 'object') return fieldTreeToSchema(node.children || []);
+  if (node.kind === 'array_object') return [fieldTreeToSchema(node.children || [])];
+  if (node.kind === 'enum') return (node.enumValues || []).map(v => String(v).trim()).filter(Boolean);
+  return node.primitiveType || 'string';
+}
+
+function fieldTreeToSchema(nodes) {
+  const out = {};
+  (nodes || []).forEach(node => {
+    const key = (node?.key || '').trim();
+    if (!key) return;
+    out[key] = fieldNodeToSchemaValue(node);
+  });
+  return out;
+}
+
+function validateFieldTree(nodes, labelPrefix = '字段') {
+  const keySet = new Set();
+  (nodes || []).forEach((node, idx) => {
+    const key = (node?.key || '').trim();
+    if (!key) throw new Error(`${labelPrefix}第 ${idx + 1} 项字段名不能为空`);
+    if (keySet.has(key)) throw new Error(`${labelPrefix}中存在重复字段名「${key}」`);
+    keySet.add(key);
+
+    if (node.kind === 'object' || node.kind === 'array_object') {
+      const children = node.children || [];
+      if (!children.length) throw new Error(`字段「${key}」是嵌套类型，至少需要一个子字段`);
+      validateFieldTree(children, `字段「${key}」的子字段`);
+    }
+    if (node.kind === 'enum') {
+      const values = (node.enumValues || []).map(v => String(v || '').trim()).filter(Boolean);
+      if (!values.length) throw new Error(`字段「${key}」的枚举值不能为空`);
+      const unique = new Set(values);
+      if (unique.size !== values.length) throw new Error(`字段「${key}」的枚举值存在重复`);
+    }
+    if (node.kind === 'primitive' && !(node.primitiveType || '').trim()) {
+      throw new Error(`字段「${key}」缺少字段类型`);
+    }
+  });
+}
+
+function normalizeNuExtractTemplateItem(item) {
+  const schema = item && typeof item === 'object' ? (item.schema ?? item.schema_definition ?? {}) : {};
+  return {
+    id: (item && item.id) ? item.id : `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    invoice_type: item?.invoice_type || '',
+    schema,
+    schemaTree: schemaToFieldTree(schema),
+  };
+}
+
+function getFieldNodesByPath(template, path, includeCurrent = false) {
+  if (!template || !Array.isArray(template.schemaTree)) return null;
+  if (!path) return template.schemaTree;
+  const idxs = String(path).split('.').map(x => parseInt(x, 10)).filter(Number.isInteger);
+  let nodes = template.schemaTree;
+  for (let i = 0; i < idxs.length; i++) {
+    const idx = idxs[i];
+    if (!nodes[idx]) return null;
+    if (i === idxs.length - 1) {
+      return includeCurrent ? nodes[idx] : nodes[idx].children;
+    }
+    nodes = nodes[idx].children || [];
+  }
+  return null;
+}
+
+function renderFieldTypeOptions(current) {
+  const options = [
+    ['primitive:string', '文本(string)'],
+    ['primitive:verbatim-string', '原文(verbatim-string)'],
+    ['primitive:number', '数字(number)'],
+    ['primitive:integer', '整数(integer)'],
+    ['primitive:date-time', '日期时间(date-time)'],
+    ['object', '对象(object)'],
+    ['array_object', '对象数组(array<object>)'],
+    ['enum', '枚举(enum)'],
+  ];
+  return options.map(([value, label]) => `<option value="${value}" ${current === value ? 'selected' : ''}>${escHtml(label)}</option>`).join('');
+}
+
+function nodeKindValue(node) {
+  if (!node) return 'primitive:string';
+  if (node.kind === 'primitive') return `primitive:${node.primitiveType || 'string'}`;
+  return node.kind;
+}
+
+function renderFieldNodes(nodes, templateIdx, pathPrefix = '') {
+  return (nodes || []).map((node, idx) => {
+    const path = pathPrefix ? `${pathPrefix}.${idx}` : `${idx}`;
+    const kindVal = nodeKindValue(node);
+    const childHtml = (node.kind === 'object' || node.kind === 'array_object')
+      ? `
+      <div class="tpl-field-children">
+        <div class="tpl-field-children-list">
+          ${renderFieldNodes(node.children || [], templateIdx, path)}
+        </div>
+        <button type="button" class="btn btn-outline btn-sm tpl-btn"
+                data-action="add-child-field" data-template-idx="${templateIdx}" data-path="${path}">
+          + 添加子字段
+        </button>
+      </div>`
+      : '';
+    const enumHtml = node.kind === 'enum'
+      ? `
+      <div class="tpl-enum-editor">
+        ${(node.enumValues || []).map((val, optIdx) => `
+          <div class="tpl-enum-item">
+            <input class="form-input tpl-enum-input" value="${escAttr(val)}"
+                   data-action="edit-enum-value"
+                   data-template-idx="${templateIdx}"
+                   data-path="${path}"
+                   data-option-idx="${optIdx}" />
+            <button type="button" class="rule-delete-btn tpl-delete-btn"
+                    data-action="delete-enum-value"
+                    data-template-idx="${templateIdx}"
+                    data-path="${path}"
+                    data-option-idx="${optIdx}">×</button>
+          </div>
+        `).join('')}
+        <button type="button" class="btn btn-outline btn-sm tpl-btn"
+                data-action="add-enum-value" data-template-idx="${templateIdx}" data-path="${path}">
+          + 添加枚举值
+        </button>
+      </div>`
+      : '';
+    return `
+      <div class="tpl-field-node">
+        <div class="tpl-field-row">
+          <input class="form-input tpl-field-key" value="${escAttr(node.key || '')}"
+                 placeholder="字段名称"
+                 data-action="edit-field-key"
+                 data-template-idx="${templateIdx}"
+                 data-path="${path}" />
+          <select class="form-select tpl-field-type"
+                  data-action="edit-field-type"
+                  data-template-idx="${templateIdx}"
+                  data-path="${path}">
+            ${renderFieldTypeOptions(kindVal)}
+          </select>
+          <button type="button" class="rule-delete-btn tpl-delete-btn"
+                  data-action="delete-field"
+                  data-template-idx="${templateIdx}"
+                  data-path="${path}">×</button>
+        </div>
+        ${enumHtml}
+        ${childHtml}
+      </div>`;
+  }).join('');
+}
+
+function renderNuExtractTemplateEditor(templates) {
+  const container = document.getElementById('nuextractTemplateList');
+  if (!container) return;
+  const safeTemplates = Array.isArray(templates) ? templates : [];
+  if (!safeTemplates.length) {
+    container.innerHTML = `<div class="empty-state">暂无抽取模板，请先新增发票类型并配置对应的 Schema 模板。</div>`;
+    return;
+  }
+  container.innerHTML = safeTemplates.map((t, i) => `
+    <div class="rule-item" data-idx="${i}">
+      <div class="rule-item-header">
+        <span style="font-size:16px">📄</span>
+        <input class="rule-name-input"
+               value="${escAttr(t.invoice_type || '')}"
+               data-action="edit-invoice-type"
+               data-template-idx="${i}"
+               placeholder="发票类型名称"
+               style="flex:1" />
+        <button class="rule-delete-btn" onclick="removeNuExtractTemplate(${i})">🗑️</button>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <label class="form-label">字段编辑器（支持嵌套）</label>
+        <div class="tpl-editor-wrap">
+          <div class="tpl-field-tree">
+            ${renderFieldNodes(t.schemaTree || [], i)}
+            <button type="button" class="btn btn-outline btn-sm tpl-btn"
+                    data-action="add-root-field" data-template-idx="${i}">
+              + 新增字段
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function addNuExtractTemplate() {
+  if (!Array.isArray(state.nuExtractTemplates)) state.nuExtractTemplates = [];
+  state.nuExtractTemplates.push({
+    id: `tpl_${Date.now()}`,
+    invoice_type: '新发票类型',
+    schema: {},
+    schemaTree: [createDefaultTemplateField()],
+  });
+  renderNuExtractTemplateEditor(state.nuExtractTemplates);
+}
+
+function removeNuExtractTemplate(idx) {
+  const tpl = state.nuExtractTemplates[idx];
+  const tplName = tpl?.invoice_type || `第 ${idx + 1} 个模板`;
+  if (!confirm(`确认删除发票类型「${tplName}」及其关联的抽取模板吗？此操作不可撤销。`)) return;
+  state.nuExtractTemplates.splice(idx, 1);
+  renderNuExtractTemplateEditor(state.nuExtractTemplates);
+}
+
+function collectNuExtractTemplates() {
+  const typeNameSet = new Set();
+  const templates = Array.isArray(state.nuExtractTemplates) ? state.nuExtractTemplates : [];
+  if (!templates.length) {
+    throw new Error('至少需要保留一个发票类型与对应抽取模板');
+  }
+  return templates.map((tpl, i) => {
+    const invoice_type = (tpl.invoice_type || '').trim();
+    if (!invoice_type) {
+      throw new Error(`第 ${i + 1} 个模板的发票类型名称不能为空`);
+    }
+    if (typeNameSet.has(invoice_type)) {
+      throw new Error(`发票类型「${invoice_type}」重复，请保持唯一`);
+    }
+    typeNameSet.add(invoice_type);
+    const fieldTree = tpl.schemaTree || [];
+    validateFieldTree(fieldTree, `模板「${invoice_type}」`);
+    const schema = fieldTreeToSchema(fieldTree);
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+      throw new Error(`第 ${i + 1} 个模板 (${invoice_type}) 的 Schema 必须是 JSON 对象`);
+    }
+    if (!Object.keys(schema).length) {
+      throw new Error(`第 ${i + 1} 个模板 (${invoice_type}) 至少需要一个字段`);
+    }
+    // 复用原有的 ID 或生成新 ID
+    const id = (tpl && tpl.id) ? tpl.id : `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return { id, invoice_type, schema };
+  });
+}
+
+function handleTemplateEditorClick(event) {
+  const el = event.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  const templateIdx = parseInt(el.dataset.templateIdx, 10);
+  if (!Number.isInteger(templateIdx) || !state.nuExtractTemplates[templateIdx]) return;
+  const template = state.nuExtractTemplates[templateIdx];
+  const path = el.dataset.path || '';
+
+  if (action === 'add-root-field') {
+    template.schemaTree.push(createDefaultTemplateField());
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+    return;
+  }
+  if (action === 'add-child-field') {
+    const parent = getFieldNodesByPath(template, path, true);
+    if (!parent) return;
+    if (!Array.isArray(parent.children)) parent.children = [];
+    parent.children.push(createDefaultTemplateField());
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+    return;
+  }
+  if (action === 'delete-field') {
+    const idxs = String(path).split('.').map(x => parseInt(x, 10)).filter(Number.isInteger);
+    if (!idxs.length) return;
+    const last = idxs[idxs.length - 1];
+    const parentPath = idxs.slice(0, -1).join('.');
+    const siblings = parentPath ? getFieldNodesByPath(template, parentPath) : template.schemaTree;
+    if (!Array.isArray(siblings) || !siblings[last]) return;
+    siblings.splice(last, 1);
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+    return;
+  }
+  if (action === 'add-enum-value') {
+    const node = getFieldNodesByPath(template, path, true);
+    if (!node) return;
+    if (!Array.isArray(node.enumValues)) node.enumValues = [];
+    node.enumValues.push('新枚举值');
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+    return;
+  }
+  if (action === 'delete-enum-value') {
+    const node = getFieldNodesByPath(template, path, true);
+    const optIdx = parseInt(el.dataset.optionIdx, 10);
+    if (!node || !Array.isArray(node.enumValues) || !Number.isInteger(optIdx) || !node.enumValues[optIdx]) return;
+    node.enumValues.splice(optIdx, 1);
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+  }
+}
+
+function handleTemplateEditorChange(event) {
+  const el = event.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  const templateIdx = parseInt(el.dataset.templateIdx, 10);
+  if (!Number.isInteger(templateIdx) || !state.nuExtractTemplates[templateIdx]) return;
+  const template = state.nuExtractTemplates[templateIdx];
+  const path = el.dataset.path || '';
+
+  if (action === 'edit-invoice-type') {
+    template.invoice_type = String(el.value || '').trim();
+    return;
+  }
+
+  const node = getFieldNodesByPath(template, path, true);
+  if (!node) return;
+  if (action === 'edit-field-key') {
+    node.key = String(el.value || '').trim();
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+    return;
+  }
+  if (action === 'edit-field-type') {
+    const value = String(el.value || '');
+    if (value.startsWith('primitive:')) {
+      node.kind = 'primitive';
+      node.primitiveType = value.split(':')[1] || 'string';
+      node.children = [];
+      node.enumValues = [];
+    } else if (value === 'object') {
+      node.kind = 'object';
+      if (!Array.isArray(node.children)) node.children = [];
+      node.enumValues = [];
+    } else if (value === 'array_object') {
+      node.kind = 'array_object';
+      if (!Array.isArray(node.children)) node.children = [];
+      node.enumValues = [];
+    } else if (value === 'enum') {
+      node.kind = 'enum';
+      node.children = [];
+      if (!Array.isArray(node.enumValues) || !node.enumValues.length) node.enumValues = ['枚举值1'];
+    }
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+    return;
+  }
+  if (action === 'edit-enum-value') {
+    const optIdx = parseInt(el.dataset.optionIdx, 10);
+    if (!Array.isArray(node.enumValues) || !Number.isInteger(optIdx)) return;
+    node.enumValues[optIdx] = String(el.value || '').trim();
+    renderNuExtractTemplateEditor(state.nuExtractTemplates);
+  }
+}
+
 function normalizeExtractionConfig(extraction) {
   const src = extraction || {};
   const ocr = src.ocr || {};
@@ -2048,7 +2474,7 @@ async function saveConfig() {
         },
         nuextract: {
           host: document.getElementById('nuHost').value,
-          port: parseInt(document.getElementById('nuPort').value),
+          port: document.getElementById('nuPort').value,
           timeout: parseInt(document.getElementById('nuTimeout').value),
         },
         // 保留 extraction，避免模型配置保存时误删 YAML 中该段
@@ -2057,6 +2483,16 @@ async function saveConfig() {
       await api('PUT', '/api/config/models', models);
       state.modelsConfig = models;
       toast('模型服务配置已保存并生效', 'success');
+    } else if (activeTab === 'tabNuExtractTemplates') {
+      try {
+        const templates = collectNuExtractTemplates();
+        await api('PUT', '/api/config/nuextract-templates', { templates });
+        state.nuExtractTemplates = templates.map(normalizeNuExtractTemplateItem);
+        renderNuExtractTemplateEditor(state.nuExtractTemplates);
+        toast('抽取模板配置已保存并生效', 'success');
+      } catch (err) {
+        toast(err.message, 'warning');
+      }
     }
   } catch (e) {
     toast(`保存失败：${e}`, 'error');
@@ -2108,6 +2544,7 @@ document.getElementById('btnLangToggle')?.addEventListener('click', switchLangua
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async function init() {
   try {
+    bindConfigModalEvents();
     loadArchiveFromStorage();
     applyLanguage();
     setupArchivePanelOnce();

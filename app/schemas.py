@@ -137,7 +137,7 @@ class LLMConfig(BaseModel):
 
 class NuExtractConfig(BaseModel):
     host: str
-    port: int
+    port: Any
     timeout: int = 60
 
 
@@ -161,6 +161,24 @@ class ModelsConfig(BaseModel):
 
 class TravelConfig(BaseModel):
     home_city: str = "上海"
+
+
+# ─── 抽取模板相关 ─────────────────────────────────────────────────────────────
+
+class NuExtractTemplateItem(BaseModel):
+    id: str
+    invoice_type: str
+    schema_definition: dict[str, Any] = Field(
+        ...,
+        alias="schema",
+        serialization_alias="schema",
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class NuExtractTemplatesConfig(BaseModel):
+    templates: list[NuExtractTemplateItem]
 
 
 # ─── 通用响应 ────────────────────────────────────────────────────────────────

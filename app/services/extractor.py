@@ -56,28 +56,39 @@ def load_json_templates() -> dict:
             _JSON_TEMPLATES_CACHE = {}
     return _JSON_TEMPLATES_CACHE
 
+def get_normalized_templates() -> list[dict]:
+    """返回归一化后的 templates 数组"""
+    data = load_json_templates()
+    if "templates" in data:
+        return data["templates"]
+    
+    # 兼容老格式
+    _LEGACY_MAP = {
+        "regular_invoice_template": "电子发票（普通发票）",
+        "railway_electronic_ticket_template": "电子发票（铁路电子客票）",
+        "air_transportation_electronic_ticket_itinerary": "航空运输电子客票行程单",
+        "train_physical_ticket": "火车票报销凭证"
+    }
+    templates = []
+    for k, v in data.items():
+        if k == "invoice_type":
+            continue
+        if isinstance(v, dict):
+            inv_type = _LEGACY_MAP.get(k, k)
+            templates.append({
+                "id": k,
+                "invoice_type": inv_type,
+                "schema": v
+            })
+    return templates
 
-def reload_json_templates() -> dict:
-    """强制重新加载 JSON 模板（用于热更新）。"""
-    global _JSON_TEMPLATES_CACHE
-    _JSON_TEMPLATES_CACHE = None
-    return load_json_templates()
 
-
-# JSON 中的中文类型名 → 内部 key
-_JSON_TYPE_TO_KEY: dict[str, str] = {
-    "电子发票（普通发票）": "general_invoice",
-    "电子发票（铁路电子客票）": "train_electronic",
-    "航空运输电子客票行程单": "air_itinerary",
-    "火车票报销凭证": "train_physical",
-}
-
-# 内部 key → JSON 模板名
-_KEY_TO_JSON_TEMPLATE_NAME: dict[str, str] = {
-    "general_invoice": "regular_invoice_template",
-    "train_electronic": "railway_electronic_ticket_template",
-    "air_itinerary": "air_transportation_electronic_ticket_itinerary",
-    "train_physical": "train_physical_ticket",
+# 内部 template ID → 内部 key，用于匹配专属归一化逻辑
+_TEMPLATE_ID_TO_INTERNAL_KEY: dict[str, str] = {
+    "regular_invoice_template": "general_invoice",
+    "railway_electronic_ticket_template": "train_electronic",
+    "air_transportation_electronic_ticket_itinerary": "air_itinerary",
+    "train_physical_ticket": "train_physical",
 }
 
 # 不走 JSON 2-step，使用原有 Python 模板的类型
@@ -318,9 +329,9 @@ def detect_items_subcategory(items_description: str, remarks: str = "") -> Optio
 # 分类结果解析：从 NuExtract 分类输出中解析内部类型 key
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _parse_classified_type(raw: dict, filename: str = "") -> str:
+def _parse_classified_type(raw: dict, templates_list: list[dict], filename: str = "") -> Optional[dict]:
     """
-    解析 NuExtract 分类步骤返回的结果，得到内部类型 key。
+    解析 NuExtract 分类步骤返回的结果，从 templates_list 中找到匹配的模板对象。
     若无法确定则回退到文件名启发式检测。
     """
     inv_type_str = ""
@@ -328,26 +339,44 @@ def _parse_classified_type(raw: dict, filename: str = "") -> str:
         inv_type_str = str(raw.get("invoice_type") or "")
 
     # 精确匹配
-    if inv_type_str in _JSON_TYPE_TO_KEY:
-        return _JSON_TYPE_TO_KEY[inv_type_str]
+    for t in templates_list:
+        if t["invoice_type"] == inv_type_str:
+            return t
 
     # 模糊匹配
-    for name, key in _JSON_TYPE_TO_KEY.items():
-        if name in inv_type_str:
-            return key
+    for t in templates_list:
+        if t["invoice_type"] in inv_type_str or inv_type_str in t["invoice_type"]:
+            return t
 
-    # 关键词兜底
+    # 关键词兜底（基于旧版常见类型）
     if "铁路" in inv_type_str or "客票" in inv_type_str:
-        return "train_electronic"
+        for t in templates_list:
+            if t.get("id") == "railway_electronic_ticket_template":
+                return t
     if "行程单" in inv_type_str or "航空" in inv_type_str:
-        return "air_itinerary"
+        for t in templates_list:
+            if t.get("id") == "air_transportation_electronic_ticket_itinerary":
+                return t
     if "报销凭证" in inv_type_str or "火车票" in inv_type_str:
-        return "train_physical"
+        for t in templates_list:
+            if t.get("id") == "train_physical_ticket":
+                return t
     if "普通" in inv_type_str or "电子发票" in inv_type_str:
-        return "general_invoice"
+        for t in templates_list:
+            if t.get("id") == "regular_invoice_template":
+                return t
 
     # 回退文件名检测
-    return detect_invoice_type(filename)
+    fallback_key = detect_invoice_type(filename)
+    # 根据 fallback_key (如 train_electronic) 查找对应的 template_id
+    # _TEMPLATE_ID_TO_INTERNAL_KEY 是 { template_id: internal_key }
+    for tid, ikey in _TEMPLATE_ID_TO_INTERNAL_KEY.items():
+        if ikey == fallback_key:
+            for t in templates_list:
+                if t.get("id") == tid:
+                    return t
+    
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -678,18 +707,22 @@ def _normalize_json_train_physical(raw: dict) -> dict:
     return result
 
 
-def _normalize_from_json_templates(raw: dict, inv_type: str) -> dict:
-    """根据 inv_type 选择对应的 JSON 模板归一化函数。"""
-    if inv_type == "general_invoice":
+def _normalize_from_json_templates(raw: dict, template: dict) -> dict:
+    """根据 template_id 选择对应的 JSON 模板归一化函数。"""
+    template_id = template.get("id")
+    internal_key = _TEMPLATE_ID_TO_INTERNAL_KEY.get(template_id)
+    if internal_key == "general_invoice":
         return _normalize_json_general_invoice(raw)
-    elif inv_type == "train_electronic":
+    elif internal_key == "train_electronic":
         return _normalize_json_railway_electronic(raw)
-    elif inv_type == "air_itinerary":
+    elif internal_key == "air_itinerary":
         return _normalize_json_air_itinerary(raw)
-    elif inv_type == "train_physical":
+    elif internal_key == "train_physical":
         return _normalize_json_train_physical(raw)
-    # 未知类型：回退到原有 Python 模板归一化
-    return _normalize_result(raw, inv_type)
+    
+    # 兜底：对于用户新增的发票类型，走通用的兜底
+    # 按照 plan: 使用通用的 _normalize_result(raw, "general")
+    return _normalize_result(raw, "general")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -960,8 +993,8 @@ class InvoiceExtractor:
                     )
                     return _normalize_result(raw, hinted_type)
 
-                json_tpls = load_json_templates()
-                type_list = json_tpls.get("invoice_type", list(_JSON_TYPE_TO_KEY.keys()))
+                templates_list = get_normalized_templates()
+                type_list = [t["invoice_type"] for t in templates_list]
 
                 # ── Step 1: 分类 ─────────────────────────────────────────────
                 cls_raw = self._pick_first_result(
@@ -970,28 +1003,31 @@ class InvoiceExtractor:
                         template={"invoice_type": type_list},
                     )
                 )
-                inv_type = _parse_classified_type(cls_raw, filename_for_detect)
-                print(f"[InvoiceExtractor] 分类结果 {filename_for_detect!r} → {inv_type}")
-
+                matched_template = _parse_classified_type(cls_raw, templates_list, filename_for_detect)
+                
                 # ── Step 2: 精准抽取 ─────────────────────────────────────────
-                tpl_name = _KEY_TO_JSON_TEMPLATE_NAME.get(inv_type)
-                if tpl_name and tpl_name in json_tpls:
+                if matched_template and matched_template.get("schema"):
+                    inv_type_name = matched_template.get("invoice_type")
+                    print(f"[InvoiceExtractor] 分类结果 {filename_for_detect!r} → {inv_type_name}")
                     ext_raw = self._pick_first_result(
                         await client.extract_from_files(
                             file_paths=[file_path],
-                            template=json_tpls[tpl_name],
+                            template=matched_template["schema"],
                         )
                     )
-                    return _normalize_from_json_templates(ext_raw, inv_type)
+                    return _normalize_from_json_templates(ext_raw, matched_template)
 
                 # 回退：使用 Python 模板
-                py_template = TEMPLATES.get(inv_type, TEMPLATE_GENERAL)
+                # fallback matching
+                print(f"[InvoiceExtractor] 分类结果 {filename_for_detect!r} → 未匹配前端模板，回退 Python 模板")
+                fallback_key = detect_invoice_type(filename_for_detect)
+                py_template = TEMPLATES.get(fallback_key, TEMPLATE_GENERAL)
                 raw = self._pick_first_result(
                     await client.extract_from_files(
                         file_paths=[file_path], template=py_template
                     )
                 )
-                return _normalize_result(raw, inv_type)
+                return _normalize_result(raw, fallback_key)
 
             except Exception as e:
                 print(f"[InvoiceExtractor] NuExtract path error ({filename_for_detect}): {e}")
@@ -1019,8 +1055,8 @@ class InvoiceExtractor:
                     )
                     return _normalize_result(raw, hinted_type)
 
-                json_tpls = load_json_templates()
-                type_list = json_tpls.get("invoice_type", list(_JSON_TYPE_TO_KEY.keys()))
+                templates_list = get_normalized_templates()
+                type_list = [t["invoice_type"] for t in templates_list]
 
                 # Step 1: 分类
                 cls_raw = self._pick_first_result(
@@ -1030,22 +1066,25 @@ class InvoiceExtractor:
                         template={"invoice_type": type_list},
                     )
                 )
-                inv_type = _parse_classified_type(cls_raw, filename)
-                print(f"[InvoiceExtractor] 分类结果 {filename!r} → {inv_type}")
+                matched_template = _parse_classified_type(cls_raw, templates_list, filename)
 
                 # Step 2: 精准抽取
-                tpl_name = _KEY_TO_JSON_TEMPLATE_NAME.get(inv_type)
-                if tpl_name and tpl_name in json_tpls:
+                if matched_template and matched_template.get("schema"):
+                    inv_type_name = matched_template.get("invoice_type")
+                    print(f"[InvoiceExtractor] 分类结果 {filename!r} → {inv_type_name}")
                     ext_raw = self._pick_first_result(
                         await client.extract_from_base64(
                             files_data=[b64_data],
                             storage_filenames=[filename],
-                            template=json_tpls[tpl_name],
+                            template=matched_template["schema"],
                         )
                     )
-                    return _normalize_from_json_templates(ext_raw, inv_type)
+                    return _normalize_from_json_templates(ext_raw, matched_template)
 
-                py_template = TEMPLATES.get(inv_type, TEMPLATE_GENERAL)
+                # 回退：使用 Python 模板
+                print(f"[InvoiceExtractor] 分类结果 {filename!r} → 未匹配前端模板，回退 Python 模板")
+                fallback_key = detect_invoice_type(filename)
+                py_template = TEMPLATES.get(fallback_key, TEMPLATE_GENERAL)
                 raw = self._pick_first_result(
                     await client.extract_from_base64(
                         files_data=[b64_data],
@@ -1053,7 +1092,7 @@ class InvoiceExtractor:
                         template=py_template,
                     )
                 )
-                return _normalize_result(raw, inv_type)
+                return _normalize_result(raw, fallback_key)
 
             except Exception as e:
                 print(f"[InvoiceExtractor] NuExtract base64 error ({filename}): {e}")
@@ -1136,5 +1175,6 @@ def get_extractor() -> InvoiceExtractor:
 
 
 def reset_extractor() -> None:
-    global _extractor
+    global _extractor, _JSON_TEMPLATES_CACHE
     _extractor = None
+    _JSON_TEMPLATES_CACHE = None
