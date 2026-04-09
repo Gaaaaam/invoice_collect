@@ -60,6 +60,18 @@ python main.py
 
 访问 `http://127.0.0.1:8088/` 即可体验。
 
+### OCR 降级与依赖兼容
+
+未配置 NuExtract 时，系统使用本地 **RapidOCR（基于 ONNX Runtime）** 等组件识别票面文字，请按 `requirements.txt` 完整安装 OCR 相关依赖。
+
+在 **NumPy 2.x** 环境下必须使用 **onnxruntime ≥ 1.19**（本仓库已约束 `onnxruntime>=1.19.2`）。若环境中仍为旧版 onnxruntime（例如曾固定 1.16），可能出现 `_ARRAY_API` 或 `numpy.core.multiarray` 等导入错误，可执行：
+
+```bash
+pip install -U "onnxruntime>=1.19.2,<2"
+```
+
+或重新执行 `pip install -r requirements.txt`。若需其他引擎，可在 `config/models.yml` 中将 OCR 配置为 `tesseract` 或 `easyocr`（需自行安装对应 Python 包与系统组件）。
+
 ### Docker 部署
 ```
 docker pull kyriegan1007/invoice-collect:latest

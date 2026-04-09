@@ -60,6 +60,18 @@ python main.py
 
 Open `http://127.0.0.1:8088/`.
 
+### OCR fallback and dependency compatibility
+
+Without NuExtract, the app uses local **RapidOCR (onnxruntime-backed)** and related packages; install the OCR-related lines from `requirements.txt`.
+
+With **NumPy 2.x**, you need **onnxruntime ≥ 1.19** (this repo pins `onnxruntime>=1.19.2`). Older wheels (e.g. 1.16) may fail with `_ARRAY_API` or `numpy.core.multiarray` import errors. Fix with:
+
+```bash
+pip install -U "onnxruntime>=1.19.2,<2"
+```
+
+or reinstall via `pip install -r requirements.txt`. To use another engine, set OCR to `tesseract` or `easyocr` in `config/models.yml` and install the matching Python packages and system tools.
+
 ### Docker deployment
 
 ```bash

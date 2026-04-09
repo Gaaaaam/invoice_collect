@@ -140,15 +140,42 @@ def _preprocess_image_for_ocr(image_path: str) -> Optional[str]:
 _rapid_ocr_engine: Any = None
 
 
+def _is_numpy_onnx_binary_mismatch(exc: BaseException) -> bool:
+    parts: list[str] = []
+    cur: Optional[BaseException] = exc
+    for _ in range(8):
+        if cur is None:
+            break
+        parts.append(str(cur))
+        parts.append(repr(cur))
+        cur = cur.__cause__ or cur.__context__
+    blob = " ".join(parts).lower()
+    return (
+        "array_api" in blob
+        or "multiarray" in blob
+        or ("numpy" in blob and "1.x" in blob and "cannot be run" in blob)
+    )
+
+
 def _get_rapid_ocr() -> Any:
     global _rapid_ocr_engine
     if _rapid_ocr_engine is None:
         try:
             from rapidocr_onnxruntime import RapidOCR
-        except ImportError as e:
-            raise RuntimeError(
-                "未安装 RapidOCR，请执行: pip install -r requirements-ocr.txt"
-            ) from e
+        except (ImportError, SystemError) as e:
+            if _is_numpy_onnx_binary_mismatch(e):
+                raise RuntimeError(
+                    "ONNX Runtime 与当前 NumPy 不兼容（常见于 NumPy 2.x 与 onnxruntime<1.19 同时安装）。"
+                    "请在当前虚拟环境中执行: pip install -U 'onnxruntime>=1.19.2'，"
+                    "或重新执行 pip install -r requirements.txt。"
+                    "也可在配置中将 extraction.ocr.engine 改为 tesseract 或 easyocr。"
+                ) from e
+            if isinstance(e, ImportError):
+                raise RuntimeError(
+                    "未安装 RapidOCR 依赖，请执行: pip install -r requirements.txt"
+                    "（若仍失败可改用 extraction.ocr.engine: tesseract 或 easyocr）"
+                ) from e
+            raise
         _rapid_ocr_engine = RapidOCR()
     return _rapid_ocr_engine
 
@@ -422,6 +449,22 @@ def _refine_invoice_type(filename: str, full_text: str, inv_type: str) -> str:
     return inv_type
 
 
+def extract_invoice_from_ocr_full_text(full_text: str, filename_hint: str) -> dict[str, Any]:
+    """
+    在已有 OCR/PDF 全文上：类型检测 → 启发式字段 → 归一化。
+    供 extract_invoice_local_fallback 与 InvoiceExtractor._run_ocr_fallback_pipeline 复用。
+    """
+    if not (full_text or "").strip():
+        return {"error": "未能识别到文本（请确认依赖已安装且文件清晰）", "is_transport": False}
+
+    fn = filename_hint or ""
+    inv_type = detect_invoice_type(fn, full_text)
+    inv_type = _refine_invoice_type(fn, full_text, inv_type)
+    raw = _heuristic_raw(full_text, inv_type)
+    raw["_ocr_text_preview"] = full_text[:2000]
+    return _normalize_result(raw, inv_type)
+
+
 def extract_invoice_local_fallback(file_path: str, filename_hint: str, ocr_cfg: dict) -> dict[str, Any]:
     """
     从本地文件抽取：全文 OCR/PDF 文本 → 启发式字段 → _normalize_result。
@@ -432,16 +475,7 @@ def extract_invoice_local_fallback(file_path: str, filename_hint: str, ocr_cfg: 
         full_text = extract_full_text_from_file(file_path, fn, ocr_cfg)
     except Exception as e:
         return {"error": str(e), "is_transport": False}
-
-    if not (full_text or "").strip():
-        return {"error": "未能识别到文本（请确认依赖已安装且文件清晰）", "is_transport": False}
-
-    inv_type = detect_invoice_type(fn, full_text)
-    inv_type = _refine_invoice_type(fn, full_text, inv_type)
-    raw = _heuristic_raw(full_text, inv_type)
-    raw["_ocr_text_preview"] = full_text[:2000]
-
-    return _normalize_result(raw, inv_type)
+    return extract_invoice_from_ocr_full_text(full_text, fn)
 
 
 def extract_invoice_local_fallback_from_base64(b64_data: str, filename: str, ocr_cfg: dict) -> dict[str, Any]:

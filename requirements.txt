@@ -2,6 +2,8 @@ fastapi==0.111.0
 uvicorn[standard]==0.29.0
 sqlalchemy==2.0.0
 aiosqlite==0.20.0
+# onnxruntime<1.19 仅兼容 NumPy 1.x；NumPy 2.x 需 onnxruntime>=1.19（见 microsoft/onnxruntime#21085）
+numpy>=1.26.0,<3.0.0
 httpx==0.27.0
 pyyaml==6.0.1
 python-multipart==0.0.9
@@ -11,8 +13,8 @@ openai==1.30.0
 
 # OCR fallback dependencies (used by extraction.provider=ocr_fallback/auto)
 pymupdf==1.24.0
-onnxruntime==1.16.0
-rapidocr-onnxruntime==1.3.0
+onnxruntime>=1.19.2,<2
+rapidocr-onnxruntime>=1.3.0,<2
 
 # Optional OCR engines (install only when needed):
 # pytesseract==0.3.10
