@@ -355,6 +355,15 @@
           <label class="form-label">Timeout (秒)</label>
           <input class="form-input" id="llmTimeout" type="number" value="60" min="10" />
         </div>
+        <div class="form-group" style="margin-top:12px">
+          <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="optUseLlmOnFallback" />
+            <span>OCR 降级时使用 LLM 按模板抽取</span>
+          </label>
+          <div style="margin-top:6px;font-size:12px;color:#6b7280;line-height:1.5">
+            在未使用 NuExtract 或 NuExtract 失败后的本地 OCR 路径上，用已配置的 LLM 结合抽取模板输出结构化字段（需有效 LLM 配置）。
+          </div>
+        </div>
         <hr class="divider" />
         <div class="fw-600 mb-8">NuExtract 抽取服务</div>
         <div class="form-row">

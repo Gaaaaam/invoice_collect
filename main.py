@@ -64,4 +64,10 @@ async def index(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8088, reload=True)
+
+    host = os.environ.get("INVOICE_COLLECT_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(os.environ.get("INVOICE_COLLECT_PORT", "8088"))
+    except ValueError:
+        port = 8088
+    uvicorn.run("main:app", host=host, port=port, reload=True)

@@ -1,6 +1,8 @@
 import json
 import logging
+import re
 from typing import Any, Optional
+
 from openai import AsyncOpenAI
 
 from app.models_runtime import load_models_config
@@ -10,6 +12,35 @@ logger = logging.getLogger(__name__)
 
 def load_llm_config() -> dict:
     return load_models_config().get("llm") or {}
+
+
+def is_llm_configured() -> bool:
+    """base_url / api_key 已填写且非 models.yml 占位符时返回 True。"""
+    cfg = load_llm_config()
+    base = str(cfg.get("base_url") or "").strip()
+    key = str(cfg.get("api_key") or "").strip()
+    if not base or not key:
+        return False
+    bl, kl = base.lower(), key.lower()
+    if "your-base-url" in bl:
+        return False
+    if "your-api-key" in kl:
+        return False
+    return True
+
+
+def _parse_json_object_from_llm(content: str) -> Optional[dict[str, Any]]:
+    s = (content or "").strip()
+    if not s:
+        return None
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.I | re.M)
+        s = re.sub(r"\s*```\s*$", "", s)
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 class LLMClient:
@@ -150,6 +181,52 @@ class LLMClient:
             **kwargs,
         )
         return response.choices[0].message.content.strip()
+
+    async def extract_structured_from_ocr_text(
+        self,
+        full_text: str,
+        field_spec: str,
+        *,
+        invoice_type_name: str = "",
+        max_chars: int = 12000,
+    ) -> Optional[dict[str, Any]]:
+        """
+        根据字段说明从 OCR 全文抽取单个 JSON 对象（与 NuExtract 模板键一致）。
+        兼容支持 response_format=json_object 的 OpenAI 兼容接口；失败时降级重试。
+        """
+        snippet = (full_text or "")[:max_chars]
+        hint = f"\n票面类型提示：{invoice_type_name}" if invoice_type_name else ""
+        prompt = (
+            "以下是通过 OCR 得到的发票全文（可能有错字、缺行或乱序）。请只依据文本抽取信息，不要编造。"
+            f"{hint}\n\n"
+            "输出要求：仅输出一个 JSON 对象；键名与层级必须与下方「字段结构」说明一致；"
+            "无法确定的字段用 null；不要 markdown 代码围栏或其它说明文字。\n\n"
+            f"字段结构：\n{field_spec}\n\n"
+            "OCR 文本：\n---\n"
+            f"{snippet}\n---"
+        )
+
+        create_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 4096,
+        }
+        try:
+            response = await self.client.chat.completions.create(
+                **create_kwargs,
+                response_format={"type": "json_object"},
+            )
+        except Exception as first_exc:
+            logger.debug("LLM json_object mode failed, retrying without: %s", first_exc)
+            try:
+                response = await self.client.chat.completions.create(**create_kwargs)
+            except Exception as e:
+                logger.warning("LLM extract_structured_from_ocr_text error: %s", e)
+                return None
+
+        content = (response.choices[0].message.content or "").strip()
+        return _parse_json_object_from_llm(content)
 
     @staticmethod
     def _format_invoice_summary(data: dict) -> str:

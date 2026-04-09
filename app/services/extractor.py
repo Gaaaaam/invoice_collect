@@ -411,6 +411,43 @@ def load_nuextract_config() -> dict:
     return load_models_config().get("nuextract", {})
 
 
+_PLACEHOLDER_NUEXTRACT_HOST_TOKENS = frozenset(
+    {"your-host", "example.com", "changeme", "nuextract-host"}
+)
+
+
+def _parse_nuextract_port(port: Any) -> Optional[int]:
+    if port is None:
+        return None
+    if isinstance(port, int):
+        p = port
+    else:
+        s = str(port).strip()
+        if not s or s.lower() in ("your-port", "port", "none"):
+            return None
+        try:
+            p = int(s, 10)
+        except ValueError:
+            return None
+    if 1 <= p <= 65535:
+        return p
+    return None
+
+
+def nuextract_config_ready(cfg: Optional[dict] = None) -> bool:
+    """host/port 可构造合法 HTTP 端点且非明显占位符时返回 True。"""
+    c = cfg if cfg is not None else load_nuextract_config()
+    host = str(c.get("host") or "").strip()
+    if not host:
+        return False
+    hl = host.lower()
+    if hl in _PLACEHOLDER_NUEXTRACT_HOST_TOKENS:
+        return False
+    if hl.startswith("your-"):
+        return False
+    return _parse_nuextract_port(c.get("port")) is not None
+
+
 _DEFAULT_EXTRACTION: dict = {
     "provider": "auto",
     "use_llm_on_fallback": False,
@@ -956,6 +993,25 @@ def _is_intercity_transport(data: dict) -> bool:
     return False
 
 
+def _resolve_llm_template_for_fallback(inv_key: str) -> tuple[str, Any, str]:
+    """
+    OCR+LLM 路径：按内部类型选择 JSON 模板条目或 Python verbatim 模板。
+    返回 (mode, holder, normalize_key)；mode 为 json 或 python。
+    """
+    if inv_key in _PYTHON_ONLY_TYPES:
+        return ("python", TEMPLATES[inv_key], inv_key)
+    if inv_key == "air_electronic":
+        return ("python", TEMPLATES["air_electronic"], inv_key)
+    lookup_key = "general_invoice" if inv_key == "general" else inv_key
+    for tid, ikey in _TEMPLATE_ID_TO_INTERNAL_KEY.items():
+        if ikey == lookup_key:
+            for t in get_normalized_templates():
+                if t.get("id") == tid:
+                    return ("json", t, lookup_key)
+            break
+    return ("python", TEMPLATES.get("general", TEMPLATE_GENERAL), "general")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 主抽取器
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1098,11 +1154,76 @@ class InvoiceExtractor:
                 print(f"[InvoiceExtractor] NuExtract base64 error ({filename}): {e}")
                 return {"error": str(e), "is_transport": False}
 
+    async def _try_llm_on_ocr(self, full_text: str, filename: str, inv_key: str) -> Optional[dict]:
+        from app.services.llm_client import get_llm_client
+
+        mode, holder, norm_key = _resolve_llm_template_for_fallback(inv_key)
+        client = get_llm_client()
+        try:
+            if mode == "json":
+                spec = json.dumps(holder["schema"], ensure_ascii=False, indent=2)
+                inv_name = str(holder.get("invoice_type") or "")
+                raw = await client.extract_structured_from_ocr_text(
+                    full_text, spec, invoice_type_name=inv_name
+                )
+                if not raw:
+                    return None
+                return _normalize_from_json_templates(raw, holder)
+            spec_lines = "\n".join(f'- "{k}"' for k in holder.keys())
+            spec = (
+                "根对象须包含下列键（值为字符串或 null，与票面一致）：\n"
+                + spec_lines
+            )
+            raw = await client.extract_structured_from_ocr_text(
+                full_text, spec, invoice_type_name=norm_key
+            )
+            if not raw:
+                return None
+            return _normalize_result(raw, norm_key)
+        except Exception as e:
+            print(f"[InvoiceExtractor] LLM OCR 抽取失败 ({filename}): {e}")
+            return None
+
+    async def _run_ocr_fallback_pipeline(
+        self,
+        full_text: str,
+        filename: str,
+        nx_error: Optional[str],
+    ) -> dict:
+        from app.services.fallback_extract import extract_invoice_from_ocr_full_text
+        from app.services.llm_client import is_llm_configured
+
+        heuristic = extract_invoice_from_ocr_full_text(full_text, filename)
+
+        if nx_error:
+            heuristic["nuextract_error"] = nx_error
+
+        if heuristic.get("error"):
+            return heuristic
+
+        use_llm = bool(self.extraction_cfg.get("use_llm_on_fallback")) and is_llm_configured()
+        if not use_llm:
+            heuristic["extract_method"] = "ocr_fallback"
+            return heuristic
+
+        inv_key = str(heuristic.get("invoice_type_detected") or "general")
+        llm_res = await self._try_llm_on_ocr(full_text, filename, inv_key)
+        if llm_res and not llm_res.get("error"):
+            llm_res["extract_method"] = "ocr_fallback_llm"
+            llm_res["_ocr_text_preview"] = (full_text or "")[:2000]
+            if nx_error:
+                llm_res["nuextract_error"] = nx_error
+            return llm_res
+
+        heuristic["llm_extraction_error"] = "LLM 结构化抽取未返回有效结果"
+        heuristic["extract_method"] = "ocr_fallback"
+        return heuristic
+
     # ── 公开接口 ───────────────────────────────────────────────────────────
 
     async def extract_from_file(self, file_path: str, filename_hint: Optional[str] = None) -> dict:
         """按 extraction.provider 选择 NuExtract、本地 OCR 保底或自动降级。"""
-        from app.services.fallback_extract import extract_invoice_local_fallback
+        from app.services.fallback_extract import extract_full_text_from_file
 
         filename_for_detect = filename_hint or os.path.basename(file_path)
         provider = (self.extraction_cfg.get("provider") or "auto").strip().lower()
@@ -1113,26 +1234,34 @@ class InvoiceExtractor:
 
         nx_error: Optional[str] = None
         if want_nx:
-            nx_res = await self._nuextract_extract_from_path(file_path, filename_for_detect)
-            if not nx_res.get("error"):
-                nx_res["extract_method"] = "nuextract"
-                return nx_res
-            nx_error = nx_res.get("error")
+            if nuextract_config_ready():
+                nx_res = await self._nuextract_extract_from_path(file_path, filename_for_detect)
+                if not nx_res.get("error"):
+                    nx_res["extract_method"] = "nuextract"
+                    return nx_res
+                nx_error = nx_res.get("error")
+            else:
+                nx_error = "NuExtract 未配置或端口无效，已跳过远程抽取"
 
         if want_fb:
-            fb = extract_invoice_local_fallback(file_path, filename_for_detect, ocr_cfg)
-            if nx_error:
-                fb["nuextract_error"] = nx_error
-            if not fb.get("error"):
-                fb["extract_method"] = "ocr_fallback"
-            return fb
+            try:
+                full_text = extract_full_text_from_file(file_path, filename_for_detect, ocr_cfg)
+            except Exception as e:
+                err_fb: dict[str, Any] = {"error": str(e), "is_transport": False}
+                if nx_error:
+                    err_fb["nuextract_error"] = nx_error
+                return err_fb
+            return await self._run_ocr_fallback_pipeline(full_text, filename_for_detect, nx_error)
 
-        err = nx_error or "NuExtract 不可用且未启用本地 OCR（extraction.provider=nuextract）"
-        return {"error": err, "is_transport": False}
+        err_out = nx_error or "NuExtract 不可用且未启用本地 OCR（extraction.provider=nuextract）"
+        return {"error": err_out, "is_transport": False}
 
     async def extract_from_base64(self, b64_data: str, filename: str) -> dict:
         """从 base64 编码的发票数据中抽取结构化信息。"""
-        from app.services.fallback_extract import extract_invoice_local_fallback_from_base64
+        import base64
+        import tempfile
+
+        from app.services.fallback_extract import extract_full_text_from_file
 
         provider = (self.extraction_cfg.get("provider") or "auto").strip().lower()
         ocr_cfg = self.extraction_cfg.get("ocr") or {}
@@ -1142,22 +1271,38 @@ class InvoiceExtractor:
 
         nx_error: Optional[str] = None
         if want_nx:
-            nx_res = await self._nuextract_extract_from_base64(b64_data, filename)
-            if not nx_res.get("error"):
-                nx_res["extract_method"] = "nuextract"
-                return nx_res
-            nx_error = nx_res.get("error")
+            if nuextract_config_ready():
+                nx_res = await self._nuextract_extract_from_base64(b64_data, filename)
+                if not nx_res.get("error"):
+                    nx_res["extract_method"] = "nuextract"
+                    return nx_res
+                nx_error = nx_res.get("error")
+            else:
+                nx_error = "NuExtract 未配置或端口无效，已跳过远程抽取"
 
         if want_fb:
-            fb = extract_invoice_local_fallback_from_base64(b64_data, filename, ocr_cfg)
-            if nx_error:
-                fb["nuextract_error"] = nx_error
-            if not fb.get("error"):
-                fb["extract_method"] = "ocr_fallback"
-            return fb
+            try:
+                raw_bytes = base64.b64decode(b64_data)
+            except Exception as e:
+                err_b64: dict[str, Any] = {"error": f"Base64 解码失败: {e}", "is_transport": False}
+                if nx_error:
+                    err_b64["nuextract_error"] = nx_error
+                return err_b64
+            ext = os.path.splitext(filename)[1] or ".png"
+            fd, path = tempfile.mkstemp(suffix=ext)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(raw_bytes)
+                full_text = extract_full_text_from_file(path, filename, ocr_cfg)
+            finally:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            return await self._run_ocr_fallback_pipeline(full_text, filename, nx_error)
 
-        err = nx_error or "NuExtract 不可用且未启用本地 OCR（extraction.provider=nuextract）"
-        return {"error": err, "is_transport": False}
+        err_b64_out = nx_error or "NuExtract 不可用且未启用本地 OCR（extraction.provider=nuextract）"
+        return {"error": err_b64_out, "is_transport": False}
 
     @staticmethod
     def _pick_first_result(raw_result: Any) -> dict:

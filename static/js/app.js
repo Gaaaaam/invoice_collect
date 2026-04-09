@@ -2036,6 +2036,8 @@ function renderModelsEditor(models) {
   document.getElementById('nuHost').value = models.nuextract?.host || '';
   document.getElementById('nuPort').value = models.nuextract?.port || '';
   document.getElementById('nuTimeout').value = models.nuextract?.timeout || 60;
+  const llmFb = document.getElementById('optUseLlmOnFallback');
+  if (llmFb) llmFb.checked = Boolean(models.extraction?.use_llm_on_fallback);
 }
 
 // ── NuExtract Templates Editor ────────────────────────────────────────────────
@@ -2465,6 +2467,10 @@ async function saveConfig() {
       state.travelConfig = { home_city: homeCity };
       toast('差旅设置已保存', 'success');
     } else if (activeTab === 'tabModels') {
+      const extPrev = { ...(state.modelsConfig?.extraction || {}) };
+      extPrev.use_llm_on_fallback = Boolean(
+        document.getElementById('optUseLlmOnFallback')?.checked,
+      );
       const models = {
         llm: {
           base_url: document.getElementById('llmBaseUrl').value,
@@ -2477,8 +2483,7 @@ async function saveConfig() {
           port: document.getElementById('nuPort').value,
           timeout: parseInt(document.getElementById('nuTimeout').value),
         },
-        // 保留 extraction，避免模型配置保存时误删 YAML 中该段
-        extraction: normalizeExtractionConfig(state.modelsConfig?.extraction),
+        extraction: normalizeExtractionConfig(extPrev),
       };
       await api('PUT', '/api/config/models', models);
       state.modelsConfig = models;
