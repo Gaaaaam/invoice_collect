@@ -122,6 +122,8 @@ def _invoice_to_dict(inv: Invoice) -> dict:
         "arrival_time": inv.arrival_time,
         "is_transport": inv.is_transport,
         "filename": inv.filename,
+        # 供差旅闭环从原始抽取字段恢复「乘车日」等，避免列上仅有开票日
+        "extracted_data": extracted,
     }
 
 

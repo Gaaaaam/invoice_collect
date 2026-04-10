@@ -2,12 +2,14 @@
 差旅闭环检测 & 会议分组逻辑
 
 差旅闭环算法：
-  1. 筛选差旅费中的城市间交通类发票（is_transport=True），按出发时间排序
+  1. 筛选差旅费中的城市间交通类发票（is_transport=True），按乘车/航班事件时间排序
+     （优先列字段 departure_time 中的年月日，其次 extracted_data 乘车/航班日期，最后才用开票日）
   2. 城市识别：通过 station_city_map 将车站/机场名统一到城市名
   3. 混合交通支持：飞机、火车、高铁、动车可混搭组成闭环
   4. 以每张交通票的"出发城市"为起点，贪心延伸行程
      - 优先从 home_city（用户所在城市）出发的票开始组链，避免"回家票"误消耗出发票
-     - 下一张票的"出发城市" == 当前票的"到达城市" → 接续（在时间上位于链起始票之后）
+     - 下一张票的"出发城市"（归一化后）== 当前所在城市 → 接续；下一段在**全部未使用**交通票中
+       按乘车日期选取（支持多城市 A→B→C→A，且纠正「仅按排序列表顺序」导致的断链）
      - 当某票的"到达城市" == 起点城市 → 闭环成立
   5. 将闭环时间段内的所有差旅费发票（含住宿/餐饮/出租等）归入同一组
   6. 未参与闭环的交通票各自成组（未闭合行程），无交通票的散票单独一组
@@ -21,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 from dateutil import parser as dateutil_parser
 
@@ -45,13 +47,245 @@ def _normalize_city(raw: Optional[str]) -> str:
 
 # ─── 日期解析 ─────────────────────────────────────────────────────────────────
 
+_RE_CN_YMD = re.compile(
+    r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?"
+)
+
+
 def _parse_date(date_str: Optional[str]) -> Optional[date]:
     if not date_str:
         return None
+    raw = str(date_str).strip()
+    m = _RE_CN_YMD.search(raw)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(y, mo, d)
+        except ValueError:
+            pass
     try:
-        return dateutil_parser.parse(date_str, dayfirst=False).date()
+        return dateutil_parser.parse(raw, dayfirst=False).date()
     except Exception:
         return None
+
+
+_YEAR_IN_STR = re.compile(r"\d{4}")
+_TIME_ONLY = re.compile(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$")
+# 从「2025年06月04日 12:48开」等整段文字中提取时刻
+_HHMM_IN_TEXT = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2})(?!\d)")
+
+
+def _hhmm_tuple_from_text(text: Optional[str]) -> Optional[tuple[int, int]]:
+    if not text:
+        return None
+    m = _HHMM_IN_TEXT.search(str(text))
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if 0 <= h < 24 and 0 <= mi < 60:
+        return h, mi
+    return None
+
+
+def _extract_departure_date_str(ex: dict) -> str:
+    if not ex:
+        return ""
+    for key in (
+        "departure_date",
+        "出发日期",
+        "乘车日期",
+        "乘车日期时间",
+        "航班日期(DATE)",
+        "航班日期",
+    ):
+        v = ex.get(key)
+        if v and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _extract_departure_time_str(ex: dict) -> str:
+    if not ex:
+        return ""
+    for key in ("departure_time", "出发时间", "乘车时间"):
+        v = ex.get(key)
+        if v and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _transport_event_datetime(inv: dict) -> Optional[datetime]:
+    """
+    差旅交通票的「事件时间」，用于排序与接链。
+    严格优先：departure_time 中含年月日 → extracted_data 乘车/航班日期(+时间) →
+    仅列上的可解析日期 → 最后才用 issue_date（开票日兜底）。
+    """
+    ex = inv.get("extracted_data") if isinstance(inv.get("extracted_data"), dict) else {}
+    dep_col = (inv.get("departure_time") or "").strip()
+
+    if dep_col and _YEAR_IN_STR.search(dep_col):
+        try:
+            return dateutil_parser.parse(dep_col, dayfirst=False)
+        except Exception:
+            d0 = _parse_date(dep_col)
+            if d0:
+                return datetime.combine(d0, time.min)
+
+    dd = _extract_departure_date_str(ex)
+    d_ex = _parse_date(dd) if dd else None
+
+    tm_str = ""
+    if dep_col and _TIME_ONLY.match(dep_col):
+        tm_str = dep_col.strip()
+    if not tm_str:
+        tm_str = _extract_departure_time_str(ex).strip()
+
+    if d_ex:
+        hm = _hhmm_tuple_from_text(tm_str) if tm_str else None
+        if not hm and dd:
+            hm = _hhmm_tuple_from_text(dd)
+        if hm:
+            return datetime.combine(d_ex, time(hm[0], hm[1]))
+        m = _TIME_ONLY.match(tm_str) if tm_str else None
+        if m:
+            h, mi = int(m.group(1)), int(m.group(2))
+            return datetime.combine(d_ex, time(h, mi))
+        return datetime.combine(d_ex, time.min)
+
+    if dep_col:
+        d_col = _parse_date(dep_col)
+        if d_col:
+            return datetime.combine(d_col, time.min)
+
+    issue = (inv.get("issue_date") or "").strip()
+    idate = _parse_date(issue)
+    if idate:
+        return datetime.combine(idate, time.min)
+    return None
+
+
+def _sort_datetime_for_transport(inv: dict) -> datetime:
+    """排序用：无事件时间的票排在最早，避免随机打散 home 起点顺序。"""
+    dt = _transport_event_datetime(inv)
+    return dt if dt else datetime(1970, 1, 1)
+
+
+def _cities_chain_match(here_normalized: str, dep_raw: Optional[str]) -> bool:
+    """同城不同表述（归一化不一致时的保守补救）：如一方包含另一方城市核心词。"""
+    d = _normalize_city(dep_raw)
+    if not here_normalized or not d or here_normalized == d:
+        return False
+    a, b = here_normalized.replace(" ", ""), d.replace(" ", "")
+    if len(a) >= 2 and len(b) >= 2 and (a in b or b in a):
+        return True
+    return False
+
+
+def _departure_is_home(home_norm: str, dep_raw: Optional[str]) -> bool:
+    """票面出发地是否视为 base 地（归一化一致或同城别名）。"""
+    if not home_norm:
+        return False
+    d = _normalize_city(dep_raw)
+    if d == home_norm:
+        return True
+    return _cities_chain_match(home_norm, dep_raw)
+
+
+def _non_transport_absorb_date(inv: dict) -> Optional[date]:
+    """
+    非交通票归入行程窗口时参考的日期：优先住宿入住等业务日，而非开票日。
+    """
+    ex = inv.get("extracted_data") if isinstance(inv.get("extracted_data"), dict) else {}
+    for key in (
+        "check_in_date",
+        "入住日期",
+        "住宿日期",
+        "入住时间",
+        "trip_date",
+    ):
+        v = ex.get(key)
+        if v and str(v).strip():
+            d = _parse_date(str(v).strip())
+            if d:
+                return d
+    col_dep = (inv.get("departure_time") or "").strip()
+    if col_dep and _YEAR_IN_STR.search(col_dep):
+        d = _parse_date(col_dep)
+        if d:
+            return d
+    ev = _transport_event_datetime(inv)
+    if ev:
+        return ev.date()
+    return _parse_date(inv.get("departure_time") or inv.get("issue_date"))
+
+
+def _pick_next_transport_leg(
+    chain: list[dict],
+    current_city: str,
+    origin: str,
+    transport_sorted: list[dict],
+    used: set[int],
+) -> tuple[Optional[dict], str, bool]:
+    """
+    从全部未使用票中选取下一段：出发城市（归一化）与当前所在城市一致或可链接。
+    优先选事件时间不早于上一段的票；若无，则在首段日起 30 天窗口内取最早一张。
+    返回 (下一张票或 None, 新的所在城市, 是否已回到 origin)。
+    """
+    if not current_city:
+        return None, current_city, False
+    candidates = [
+        inv
+        for inv in transport_sorted
+        if inv["id"] not in used
+        and (
+            _normalize_city(inv.get("departure_city")) == current_city
+            or _cities_chain_match(current_city, inv.get("departure_city"))
+        )
+    ]
+    if not candidates:
+        return None, current_city, False
+
+    last_dt = _transport_event_datetime(chain[-1])
+    first_dt = _transport_event_datetime(chain[0])
+    first_d = first_dt.date() if first_dt else date.min
+    window_end = first_d + timedelta(days=30) if first_d != date.min else None
+
+    def in_trip_window(dt: Optional[datetime]) -> bool:
+        if not dt:
+            return False
+        d = dt.date()
+        if first_d == date.min:
+            return True
+        if d < first_d:
+            return False
+        if window_end is not None and d > window_end:
+            return False
+        return True
+
+    dated: list[tuple[dict, datetime]] = []
+    for inv in candidates:
+        dt = _transport_event_datetime(inv)
+        if dt:
+            dated.append((inv, dt))
+    if not dated:
+        return None, current_city, False
+
+    ok = [
+        (inv, dt)
+        for inv, dt in dated
+        if last_dt is None or dt >= last_dt
+    ]
+    ok = [(inv, dt) for inv, dt in ok if in_trip_window(dt)]
+    if not ok and last_dt is not None:
+        ok = [(inv, dt) for inv, dt in dated if in_trip_window(dt)]
+    if not ok:
+        ok = dated
+
+    next_inv, next_dt = min(ok, key=lambda x: x[1])
+    used.add(next_inv["id"])
+    new_city = _normalize_city(next_inv.get("arrival_city"))
+    closed = bool(new_city and new_city == origin)
+    return next_inv, new_city, closed
 
 
 # ─── 差旅闭环检测 ─────────────────────────────────────────────────────────────
@@ -89,15 +323,13 @@ class TravelLoop:
         """
         if self.start_date is None or self.end_date is None:
             return
-        from datetime import timedelta
         window_start = self.start_date - timedelta(days=1)
         window_end = self.end_date + timedelta(days=1)
 
         for inv in invoices:
             if inv["id"] in self.all_invoice_ids:
                 continue
-            # 优先用出发时间，否则用开票日期
-            d = _parse_date(inv.get("departure_time") or inv.get("issue_date"))
+            d = _non_transport_absorb_date(inv)
             if d and window_start <= d <= window_end:
                 self.all_invoice_ids.append(inv["id"])
 
@@ -166,12 +398,8 @@ def detect_travel_loops(
             return [lone]
         return []
 
-    # 按出发时间排序
-    def sort_key(inv: dict):
-        d = _parse_date(inv.get("departure_time") or inv.get("issue_date"))
-        return d or date.min
-
-    transport_sorted = sorted(transport, key=sort_key)
+    # 按乘车/航班事件时间排序（优先 departure_time 与 extracted 乘车日，而非开票日）
+    transport_sorted = sorted(transport, key=_sort_datetime_for_transport)
 
     # 优先从 home_city 出发的票开始组链。
     # 这样可避免"上次出差的回程票"（如 BJ→SH）在时间上排在前面，
@@ -181,11 +409,11 @@ def detect_travel_loops(
     if home:
         home_indices = [
             i for i, inv in enumerate(transport_sorted)
-            if _normalize_city(inv.get("departure_city")) == home
+            if _departure_is_home(home, inv.get("departure_city"))
         ]
         other_indices = [
             i for i, inv in enumerate(transport_sorted)
-            if _normalize_city(inv.get("departure_city")) != home
+            if not _departure_is_home(home, inv.get("departure_city"))
         ]
         start_order = home_indices + other_indices
     else:
@@ -203,16 +431,13 @@ def detect_travel_loops(
         if not origin:
             # 出发城市不明的交通票单独成组
             used.add(start_inv["id"])
+            lone_ev = _transport_event_datetime(start_inv)
             lone = TravelLoop(
                 transport_ids=[start_inv["id"]],
                 start_city=start_inv.get("departure_city") or "",
                 end_city=start_inv.get("arrival_city") or "",
-                start_date=_parse_date(
-                    start_inv.get("departure_time") or start_inv.get("issue_date")
-                ),
-                end_date=_parse_date(
-                    start_inv.get("arrival_time") or start_inv.get("issue_date")
-                ),
+                start_date=lone_ev.date() if lone_ev else None,
+                end_date=lone_ev.date() if lone_ev else None,
                 transport_modes=[_get_transport_mode(start_inv)],
             )
             lone.is_closed = False
@@ -232,31 +457,24 @@ def detect_travel_loops(
         if current_dest:
             cities_path.append(current_dest)
 
-        if not closed:
-            # 在时间上位于链起始票之后的所有未使用交通票中寻找接续段。
-            # 用 start_idx 定位起始票在时间排序中的位置，确保接续票时间上不早于出发。
-            for inv in transport_sorted[start_idx + 1:]:
-                if inv["id"] in used:
-                    continue
-                dep = _normalize_city(inv.get("departure_city"))
+        while not closed and current_dest:
+            nxt, current_dest, closed = _pick_next_transport_leg(
+                chain, current_dest, origin, transport_sorted, used
+            )
+            if nxt is None:
+                break
+            chain.append(nxt)
+            modes.append(_get_transport_mode(nxt))
+            if current_dest and (not cities_path or cities_path[-1] != current_dest):
+                cities_path.append(current_dest)
 
-                if dep == current_dest:
-                    chain.append(inv)
-                    used.add(inv["id"])
-                    modes.append(_get_transport_mode(inv))
-                    current_dest = _normalize_city(inv.get("arrival_city"))
-                    if current_dest and (not cities_path or cities_path[-1] != current_dest):
-                        cities_path.append(current_dest)
-                    if current_dest == origin:
-                        closed = True
-                        break
-
-        start_date = _parse_date(
-            chain[0].get("departure_time") or chain[0].get("issue_date")
-        )
-        end_date = _parse_date(
-            chain[-1].get("arrival_time") or chain[-1].get("issue_date")
-        )
+        sdt = _transport_event_datetime(chain[0])
+        edt = _transport_event_datetime(chain[-1])
+        start_date = sdt.date() if sdt else None
+        end_date = edt.date() if edt else None
+        arr_d = _parse_date(chain[-1].get("arrival_time"))
+        if arr_d and end_date and arr_d > end_date:
+            end_date = arr_d
         if end_date and start_date and end_date < start_date:
             end_date = start_date
 
