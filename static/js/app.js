@@ -116,7 +116,9 @@ const I18N = {
   zh: {
     appTitle: '发票归集系统', btnProcess: '开始归集', processOptions: '归集选项', config: '配置',
     uploadedInvoices: '已上传发票', uploadHint: '点击或拖拽上传发票', uploadSupport: '支持 PDF、图片、OFD',
-    noInvoices: '暂无发票，请先上传', selectedCount: '已选 {count} 张', totalBadge: '共 {count} 张发票',
+    noInvoices: '暂无发票，请先上传',
+    allInvoicesArchived: '当前上传的发票均已归档；在右侧「历史归档」中复原后会回到本列表',
+    selectedCount: '已选 {count} 张', totalBadge: '共 {count} 张发票',
     clearSelection: '清空选择', batchDelete: '批量删除', batchDeleteSelected: '批量删除已选发票',
     classificationMethods: '分类方式', methodContentAnalysis: '内容分析', methodContentAnalysisHint: '从项目名称/备注推断费用类型',
     methodRuleMatch: '规则匹配', methodRuleMatchHint: '依据 rules.yml 中的自定义规则',
@@ -174,7 +176,9 @@ const I18N = {
   en: {
     appTitle: 'Invoice Collection System', btnProcess: 'Start Collection', processOptions: 'Collection Options', config: 'Settings',
     uploadedInvoices: 'Uploaded Invoices', uploadHint: 'Click or drag files to upload', uploadSupport: 'Supports PDF, images, OFD',
-    noInvoices: 'No invoices yet, please upload first', selectedCount: 'Selected {count}', totalBadge: '{count} invoices',
+    noInvoices: 'No invoices yet, please upload first',
+    allInvoicesArchived: 'All uploaded invoices are archived; restore from History Archive to show them here again',
+    selectedCount: 'Selected {count}', totalBadge: '{count} invoices',
     clearSelection: 'Clear Selection', batchDelete: 'Batch Delete', batchDeleteSelected: 'Delete selected invoices',
     classificationMethods: 'Classification Methods', methodContentAnalysis: 'Content Analysis', methodContentAnalysisHint: 'Infer expense type from item name/remarks',
     methodRuleMatch: 'Rule Matching', methodRuleMatchHint: 'Use custom rules in rules.yml',
@@ -526,8 +530,14 @@ function renderInvoiceList() {
     el.innerHTML = `<div class="empty-state">${t('noInvoices')}</div>`;
     return;
   }
+  const archived = getArchivedInvoiceIdSet();
+  const visible = state.invoices.filter(inv => !archived.has(inv.id));
+  if (!visible.length) {
+    el.innerHTML = `<div class="empty-state">${t('allInvoicesArchived')}</div>`;
+    return;
+  }
   const placement = buildCollectionPlacementMap(state.collectionResult);
-  el.innerHTML = state.invoices.map(inv => {
+  el.innerHTML = visible.map(inv => {
     const dotKind = invoiceDotStatusFromPlacement(inv, placement);
     return `
     <div class="invoice-item" data-id="${inv.id}" title="${inv.filename}">
@@ -549,7 +559,15 @@ function statusLabel(s) {
 }
 
 function updateTotalBadge() {
-  document.getElementById('totalBadge').textContent = t('totalBadge', { count: state.invoices.length });
+  const archived = getArchivedInvoiceIdSet();
+  const n = state.invoices.filter(inv => !archived.has(inv.id)).length;
+  document.getElementById('totalBadge').textContent = t('totalBadge', { count: n });
+}
+
+/** 左侧列表与顶部数量与归档状态同步（归档/复原/看板重绘后调用） */
+function syncUploadedInvoicePanel() {
+  renderInvoiceList();
+  updateTotalBadge();
 }
 
 // ─── 历史归档（localStorage + 归集排除）────────────────────────────────────────
@@ -1407,7 +1425,6 @@ async function loadCollectionResult() {
   pruneArchiveEntries();
   renderBoard();
   renderArchivePanel();
-  renderInvoiceList();
 }
 
 function renderBoard() {
@@ -1417,10 +1434,18 @@ function renderBoard() {
   state.sortableInstances = [];
 
   const raw = state.collectionResult;
-  if (!raw) { board.innerHTML = ''; return; }
+  if (!raw) {
+    board.innerHTML = '';
+    syncUploadedInvoicePanel();
+    return;
+  }
 
   const result = applyArchiveVisibility(raw);
-  if (!result) { board.innerHTML = ''; return; }
+  if (!result) {
+    board.innerHTML = '';
+    syncUploadedInvoicePanel();
+    return;
+  }
 
   const cols = [];
   const displayCategories = buildDisplayCategories(result);
@@ -1437,6 +1462,7 @@ function renderBoard() {
 
   if (!cols.length) {
     board.innerHTML = `<div class="empty-state" style="margin:auto;padding:60px">${t('emptyBoard')}</div>`;
+    syncUploadedInvoicePanel();
     return;
   }
 
@@ -1447,6 +1473,7 @@ function renderBoard() {
   initDragDrop();
   // 重绘后同步多选样式
   refreshSelectionUI();
+  syncUploadedInvoicePanel();
 }
 
 function buildDisplayCategories(result) {
