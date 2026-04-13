@@ -1,16 +1,12 @@
 llm:
-  base_url: your-base-url
-  api_key: your-api-key
-  model: your-model-name
+  base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+  api_key: 065a1f8e-07b1-483e-bbd3-2590bf530d31
+  model: doubao-seed-2.0-pro
   timeout: 60
 nuextract:
-  host: your-host
-  port: your-port
+  host: 192.168.1.107
+  port: '8080'
   timeout: 60
-
-# 抽取策略：nuextract 仅远程服务；ocr_fallback 仅用本地 PDF 文字层 + OCR；auto 先 NuExtract（配置有效时）再保底
-# 未部署 NuExtract 时可保持 auto：将自动跳过占位 host/port，走本地 OCR。
-# use_llm_on_fallback: true 且 LLM 已正确配置时，在 OCR 后按 nuextract 模板调用 LLM 结构化抽取（与 NuExtract 字段对齐）。
 extraction:
   provider: auto
   use_llm_on_fallback: false

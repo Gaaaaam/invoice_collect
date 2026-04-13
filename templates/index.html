@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="appTitle">发票归集系统</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260407a" />
+  <link rel="stylesheet" href="/static/css/style.css?v=20260410a" />
 </head>
 <body>
 
@@ -100,6 +100,14 @@
   <!-- 左侧已上传发票列表 -->
   <aside class="upload-panel">
     <div class="panel-title" data-i18n="uploadedInvoices">已上传发票</div>
+    <div class="invoice-status-legend" id="invoiceStatusLegend">
+      <div class="invoice-status-legend-title" data-i18n="invoiceStatusLegend">列表状态</div>
+      <div class="invoice-status-legend-row">
+        <span class="invoice-legend-item"><span class="invoice-status status-dot-collected" aria-hidden="true"></span><span data-i18n="legendCollected">已归集</span></span>
+        <span class="invoice-legend-item"><span class="invoice-status status-dot-uncollected" aria-hidden="true"></span><span data-i18n="legendUncollected">未归集</span></span>
+        <span class="invoice-legend-item"><span class="invoice-status status-dot-problem" aria-hidden="true"></span><span data-i18n="legendProblem">有问题</span></span>
+      </div>
+    </div>
 
     <div class="upload-zone" id="uploadZone">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -414,6 +422,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="/static/js/app.js?v=20260408b"></script>
+<script src="/static/js/app.js?v=20260410a"></script>
 </body>
 </html>

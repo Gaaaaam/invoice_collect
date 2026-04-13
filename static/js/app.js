@@ -71,6 +71,40 @@ function formatInvoiceAmountDisplay(inv) {
 const CAT_COLORS = {
   travel: 'travel', meeting: 'meeting', material: 'material', other: 'other',
 };
+/** 归入四大费用类型即视为「已归集」（绿点） */
+const CLASSIFIED_CATEGORY_IDS = new Set(['travel', 'meeting', 'material', 'other']);
+
+function buildCollectionPlacementMap(result) {
+  const m = new Map();
+  if (!result) return m;
+  for (const inv of result.unclassified_invoices || []) {
+    if (inv && inv.id != null) m.set(inv.id, 'unclassified');
+  }
+  for (const cat of result.categories || []) {
+    if (!CLASSIFIED_CATEGORY_IDS.has(cat.category_id)) continue;
+    for (const g of cat.groups || []) {
+      for (const inv of g.invoices || []) {
+        if (inv && inv.id != null) m.set(inv.id, 'classified');
+      }
+    }
+    for (const inv of cat.ungrouped_invoices || []) {
+      if (inv && inv.id != null) m.set(inv.id, 'classified');
+    }
+  }
+  return m;
+}
+
+/** @returns {'problem'|'collected'|'uncollected'} */
+function invoiceDotStatusFromPlacement(inv, placement) {
+  if (!inv) return 'uncollected';
+  if (inv.extract_status === 'error') return 'problem';
+  if (inv.extract_status !== 'done') return 'uncollected';
+  return placement.get(inv.id) === 'classified' ? 'collected' : 'uncollected';
+}
+
+function invoiceListDotTitle(kind) {
+  return { collected: t('legendCollected'), uncollected: t('legendUncollected'), problem: t('legendProblem') }[kind] || '';
+}
 const CATEGORY_NAME_I18N = {
   travel: { zh: '差旅费', en: 'Travel' },
   meeting: { zh: '会议费', en: 'Meeting' },
@@ -131,6 +165,11 @@ const I18N = {
     archiveBatchNoneRestore: '请先勾选要复原的归档条目',
     archiveBatchArchived: '已批量归档 {count} 个分组',
     archiveBatchRestored: '已批量复原 {count} 个分组',
+    invoiceStatusLegend: '列表状态',
+    legendCollected: '已归集',
+    legendUncollected: '未归集',
+    legendProblem: '有问题',
+    archiveDateUnknown: '未知日期',
   },
   en: {
     appTitle: 'Invoice Collection System', btnProcess: 'Start Collection', processOptions: 'Collection Options', config: 'Settings',
@@ -185,6 +224,11 @@ const I18N = {
     archiveBatchNoneRestore: 'Select archive entries to restore first',
     archiveBatchArchived: 'Archived {count} group(s)',
     archiveBatchRestored: 'Restored {count} group(s)',
+    invoiceStatusLegend: 'List status',
+    legendCollected: 'Collected',
+    legendUncollected: 'Not collected',
+    legendProblem: 'Has issues',
+    archiveDateUnknown: 'Unknown date',
   },
 };
 
@@ -482,7 +526,10 @@ function renderInvoiceList() {
     el.innerHTML = `<div class="empty-state">${t('noInvoices')}</div>`;
     return;
   }
-  el.innerHTML = state.invoices.map(inv => `
+  const placement = buildCollectionPlacementMap(state.collectionResult);
+  el.innerHTML = state.invoices.map(inv => {
+    const dotKind = invoiceDotStatusFromPlacement(inv, placement);
+    return `
     <div class="invoice-item" data-id="${inv.id}" title="${inv.filename}">
       <div class="invoice-thumb">${invoiceIcon(inv.invoice_type)}</div>
       <div class="invoice-meta">
@@ -492,9 +539,9 @@ function renderInvoiceList() {
           ${inv.issue_date ? ' · ' + inv.issue_date.slice(0, 10) : ''}
         </div>
       </div>
-      <div class="invoice-status status-${inv.extract_status}" title="${statusLabel(inv.extract_status)}"></div>
-    </div>
-  `).join('');
+      <div class="invoice-status status-dot-${dotKind}" title="${escAttr(invoiceListDotTitle(dotKind))}"></div>
+    </div>`;
+  }).join('');
 }
 
 function statusLabel(s) {
@@ -798,25 +845,38 @@ async function batchRestoreSelectedArchiveEntries() {
   }
 }
 
-function renderArchivePanel() {
-  const mount = document.getElementById('archiveEntries');
-  const hint = document.getElementById('archiveEmptyHint');
-  if (!mount) return;
-  if (!(state.archiveEntries || []).length) {
-    mount.innerHTML = '';
-    if (hint) hint.classList.remove('hidden');
-    return;
+function archiveEntryDateKey(ent) {
+  const ts = ent?.addedAt;
+  if (ts == null || !Number.isFinite(Number(ts))) return '__unknown__';
+  const d = new Date(Number(ts));
+  if (Number.isNaN(d.getTime())) return '__unknown__';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function formatArchiveSectionDateLabel(dateKey) {
+  if (dateKey === '__unknown__') return t('archiveDateUnknown');
+  const parts = dateKey.split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) return t('archiveDateUnknown');
+  const [y, mo, da] = parts;
+  const d = new Date(y, mo - 1, da);
+  if (state.lang === 'en') {
+    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   }
-  if (hint) hint.classList.add('hidden');
-  mount.innerHTML = state.archiveEntries.map(ent => {
-    const catLabel = displayCategoryName(ent.categoryId, ent.categoryName || '');
-    const n = (ent.invoiceIds || []).length;
-    const rows = (ent.invoiceIds || []).map(id => {
-      const inv = findInvoiceInResult(id);
-      const title = inv?.invoice_type || inv?.filename || `#${id}`;
-      const amt = formatInvoiceAmountDisplay(inv);
-      const date = (inv?.issue_date || '').slice(0, 10);
-      return `
+  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function renderArchiveEntryCard(ent) {
+  const catLabel = displayCategoryName(ent.categoryId, ent.categoryName || '');
+  const n = (ent.invoiceIds || []).length;
+  const rows = (ent.invoiceIds || []).map(id => {
+    const inv = findInvoiceInResult(id);
+    const title = inv?.invoice_type || inv?.filename || `#${id}`;
+    const amt = formatInvoiceAmountDisplay(inv);
+    const date = (inv?.issue_date || '').slice(0, 10);
+    return `
         <div class="archive-inv-row">
           <span class="archive-inv-icon">${invoiceIcon(inv?.invoice_type)}</span>
           <div class="archive-inv-info">
@@ -824,9 +884,9 @@ function renderArchivePanel() {
             <div class="archive-inv-sub">${escHtml(date)}${amt ? ' · ' + amt : ''}</div>
           </div>
         </div>`;
-    }).join('');
-    const gname = ent.groupName || t('ungrouped');
-    return `
+  }).join('');
+  const gname = ent.groupName || t('ungrouped');
+  return `
       <div class="archive-group-card" data-archive-entry-id="${escAttr(ent.id)}">
         <div class="archive-group-header" onclick="toggleArchiveEntry(event, this)">
           <input type="checkbox" class="archive-entry-select" onclick="event.stopPropagation()"
@@ -843,6 +903,37 @@ function renderArchivePanel() {
         </div>
         <div class="archive-group-body collapsed">${rows}</div>
       </div>`;
+}
+
+function renderArchivePanel() {
+  const mount = document.getElementById('archiveEntries');
+  const hint = document.getElementById('archiveEmptyHint');
+  if (!mount) return;
+  if (!(state.archiveEntries || []).length) {
+    mount.innerHTML = '';
+    if (hint) hint.classList.remove('hidden');
+    return;
+  }
+  if (hint) hint.classList.add('hidden');
+  const byDate = new Map();
+  for (const ent of state.archiveEntries) {
+    const k = archiveEntryDateKey(ent);
+    if (!byDate.has(k)) byDate.set(k, []);
+    byDate.get(k).push(ent);
+  }
+  for (const arr of byDate.values()) {
+    arr.sort((a, b) => (Number(b.addedAt) || 0) - (Number(a.addedAt) || 0));
+  }
+  const keys = [...byDate.keys()].sort((a, b) => {
+    if (a === '__unknown__') return 1;
+    if (b === '__unknown__') return -1;
+    return b.localeCompare(a);
+  });
+  mount.innerHTML = keys.map(dateKey => {
+    const entries = byDate.get(dateKey);
+    const heading = formatArchiveSectionDateLabel(dateKey);
+    const cards = entries.map(renderArchiveEntryCard).join('');
+    return `<div class="archive-date-section"><div class="archive-date-heading">${escHtml(heading)}</div>${cards}</div>`;
   }).join('');
 }
 
@@ -1316,6 +1407,7 @@ async function loadCollectionResult() {
   pruneArchiveEntries();
   renderBoard();
   renderArchivePanel();
+  renderInvoiceList();
 }
 
 function renderBoard() {
@@ -1392,13 +1484,15 @@ function renderCategoryCol(cat) {
     bodyHtml += `<div class="col-grouping-banner">${t('categoryGrouping')}</div>`;
     bodyHtml += cat.groups.map((g, gi) => renderGroupCard(g, cat)).join('');
     // 无组散票容器始终保留，便于空列时也可拖拽进入
+    const ungName = getUngroupedDisplayName(cat.category_id);
     bodyHtml += `
       <div class="group-card" data-board-category="${escAttr(cat.category_id)}" data-board-group-id="">
         <div class="group-header" onclick="toggleGroup(event, this)">
+          <div class="group-header-row1">
           <input type="checkbox" class="board-archive-select" onclick="event.stopPropagation()"
                  title="${escAttr(t('batchArchive'))}" aria-label="${escAttr(t('batchArchive'))}" />
           <span class="group-icon">${groupIconForCategory(cat.category_id)}</span>
-          <span class="group-name" ondblclick="renameUngroupedLabel(event, '${cat.category_id}', this)">${escHtml(getUngroupedDisplayName(cat.category_id))}</span>
+          <span class="group-name" title="${escAttr(ungName)}" ondblclick="renameUngroupedLabel(event, '${cat.category_id}', this)">${escHtml(ungName)}</span>
           <span class="group-count">${t('invoiceCount', { count: cat.ungrouped_invoices?.length || 0 })}</span>
           <button type="button" class="btn btn-outline btn-sm btn-archive-group"
                   data-archive-cat="${escAttr(cat.category_id)}" data-archive-gid=""
@@ -1410,6 +1504,7 @@ function renderCategoryCol(cat) {
                   onclick="toggleGroupSelect(event, '${cat.category_id}', '')"
                   title="${t('selectGroupTitle')}">${t('selectGroup', { count: cat.ungrouped_invoices?.length || 0 })}</button>
           <span class="group-toggle">▼</span>
+          </div>
         </div>
         <div class="group-body drop-zone" data-category="${cat.category_id}" data-group="">
           ${cat.ungrouped_invoices?.map(inv => renderInvCard(inv, cat.category_id, null)).join('') || ''}
@@ -1448,15 +1543,16 @@ function renderGroupCard(group, cat) {
   const dateRange = group.start_date
     ? `${group.start_date}${group.end_date && group.end_date !== group.start_date ? ' ~ ' + group.end_date : ''}`
     : '';
+  const gname = group.name || '';
   return `
     <div class="group-card" id="group-card-${group.id}"
          data-board-category="${cat.category_id}" data-board-group-id="${group.id}">
       <div class="group-header" onclick="toggleGroup(event, this)">
+        <div class="group-header-row1">
         <input type="checkbox" class="board-archive-select" onclick="event.stopPropagation()"
                title="${escAttr(t('batchArchive'))}" aria-label="${escAttr(t('batchArchive'))}" />
         <span class="group-icon">${icon}</span>
-        <span class="group-name" ondblclick="renameGroup(event, ${group.id}, this)">${escHtml(group.name)}</span>
-        ${dateRange ? `<span class="group-count text-muted" style="font-size:10px">${dateRange}</span>` : ''}
+        <span class="group-name" title="${escAttr(gname)}" ondblclick="renameGroup(event, ${group.id}, this)">${escHtml(gname)}</span>
         <span class="group-count">${t('invoiceCount', { count: group.invoices.length })}</span>
         <button type="button" class="btn btn-outline btn-sm btn-archive-group"
                 data-archive-cat="${escAttr(cat.category_id)}" data-archive-gid="${group.id}"
@@ -1468,6 +1564,8 @@ function renderGroupCard(group, cat) {
                 onclick="toggleGroupSelect(event, '${cat.category_id}', '${group.id}')"
                 title="${t('selectGroupTitle')}">${t('selectGroup', { count: group.invoices.length })}</button>
         <span class="group-toggle">▼</span>
+        </div>
+        ${dateRange ? `<div class="group-header-row2"><span class="group-date-range" title="${escAttr(dateRange)}">${escHtml(dateRange)}</span></div>` : ''}
       </div>
       <div class="group-body drop-zone" data-category="${cat.category_id}" data-group="${group.id}">
         ${group.invoices.map(inv => renderInvCard(inv, cat.category_id, group.id)).join('')}
@@ -2529,6 +2627,7 @@ function applyLanguage() {
   if (delBtn) delBtn.textContent = t('batchDelete');
   if (langLabel) langLabel.textContent = state.lang === 'zh' ? 'EN' : '中文';
   document.getElementById('btnLangToggle')?.setAttribute('title', t('languageSwitchTitle'));
+  document.getElementById('invoiceStatusLegend')?.setAttribute('aria-label', t('invoiceStatusLegend'));
 
   updateTotalBadge();
   refreshSelectionUI();
