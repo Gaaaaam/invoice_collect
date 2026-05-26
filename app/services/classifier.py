@@ -168,9 +168,24 @@ async def classify_invoice(
             _log_invoice_debug_context(invoice)
             return cat, "rule"
 
-    # 1b. 抽取阶段已选用铁路专用模板时，直接归差旅费（不依赖 invoice_subcategory）
+    # 1b. 会议相关单据先归 meeting，后续在分组阶段可迁移到 travel 闭环
     detected = invoice.get("invoice_type_detected") or ""
-    if detected in ("train_electronic", "train_physical"):
+    if detected in ("meeting_file", "meeting_invoice"):
+        logger.info(
+            "classify invoice_id=%s file=%s path=meeting_candidate detected=%s -> category=meeting (classified_by=rule)",
+            inv_id,
+            filename,
+            detected,
+        )
+        _log_invoice_debug_context(invoice)
+        return "meeting", "rule"
+
+    # 1c. 抽取阶段已选用特定模板时，直接归差旅费（不依赖 invoice_subcategory）
+    if detected in (
+        "train_electronic",
+        "train_physical",
+        "ridehailing_itinerary",
+    ):
         logger.info(
             "classify invoice_id=%s file=%s path=template_detected detected=%s -> category=travel (classified_by=rule)",
             inv_id,

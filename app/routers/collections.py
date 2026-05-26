@@ -31,6 +31,7 @@ from app.services.grouper import (
     build_travel_group_name,
     detect_travel_loops,
     group_meeting_invoices,
+    match_invoice_to_travel_loop,
 )
 from app.services.progress import ProgressEvent, progress_manager
 
@@ -318,8 +319,38 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 home_city = _load_home_city()
                 loops = detect_travel_loops(travel_dicts, home_city=home_city)
 
+                # 会议相关票据若命中行程时间+城市，迁移到差旅并绑定对应闭环（单归属）
+                meeting_candidates = category_buckets.get("meeting", [])
+                moved_meeting_ids: set[int] = set()
+                for inv in meeting_candidates:
+                    inv_dict = _invoice_to_dict(inv)
+                    loop_idx = match_invoice_to_travel_loop(inv_dict, loops, date_padding_days=1)
+                    if loop_idx is None:
+                        continue
+                    moved_meeting_ids.add(inv.id)
+                    target_loop = loops[loop_idx]
+                    if inv.id not in target_loop.all_invoice_ids:
+                        target_loop.all_invoice_ids.append(inv.id)
+
+                if moved_meeting_ids:
+                    item_rows = await db.execute(
+                        select(CollectionItem).where(CollectionItem.invoice_id.in_(moved_meeting_ids))
+                    )
+                    for ci in item_rows.scalars().all():
+                        ci.category_id = "travel"
+                        ci.classified_by = "rule"
+                        ci.classified_at = datetime.utcnow()
+                        if not ci.note:
+                            ci.note = "meeting_to_travel_by_time_city"
+                    category_buckets["travel"].extend(
+                        [inv for inv in meeting_candidates if inv.id in moved_meeting_ids]
+                    )
+                    category_buckets["meeting"] = [
+                        inv for inv in meeting_candidates if inv.id not in moved_meeting_ids
+                    ]
+
                 # 仅解除「本次参与差旅分组」的发票与旧组的关联，避免误伤未参与归集的发票（如历史归档）
-                travel_ids_to_regroup = {inv.id for inv in travel_invoices}
+                travel_ids_to_regroup = {inv.id for inv in category_buckets.get("travel", [])}
                 await db.execute(
                     update(CollectionItem)
                     .where(CollectionItem.invoice_id.in_(travel_ids_to_regroup))
@@ -345,11 +376,15 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 closed = sum(1 for l in loops if l.is_closed)
                 await emit(2, 4, 72, "分组",
                            f"差旅：检测到 {len(loops)} 个行程组（其中 {closed} 个完整闭环）")
+                if moved_meeting_ids:
+                    await emit(2, 4, 73, "分组",
+                               f"差旅：已将 {len(moved_meeting_ids)} 张会议相关票据并入差旅行程")
                 logger.info(
-                    "collection task_id=%s travel_groups=%s closed_loops=%s",
+                    "collection task_id=%s travel_groups=%s closed_loops=%s moved_meeting_to_travel=%s",
                     task_id,
                     len(loops),
                     closed,
+                    len(moved_meeting_ids),
                 )
 
                 for idx, loop in enumerate(loops):

@@ -89,6 +89,8 @@ _TEMPLATE_ID_TO_INTERNAL_KEY: dict[str, str] = {
     "railway_electronic_ticket_template": "train_electronic",
     "air_transportation_electronic_ticket_itinerary": "air_itinerary",
     "train_physical_ticket": "train_physical",
+    "meeting_file_template": "meeting_file",
+    "ride-hailing_itinerary_template": "ridehailing_itinerary",
 }
 
 # 不走 JSON 2-step，使用原有 Python 模板的类型
@@ -640,6 +642,9 @@ def _normalize_json_general_invoice(raw: dict) -> dict:
         subcategory = "train"
 
     result["invoice_subcategory"] = subcategory
+    if subcategory == "meeting":
+        # 会议费发票与会议通知文件分开标识，便于后续归集决策
+        result["invoice_type_detected"] = "meeting_invoice"
 
     # ── 依据子类别填充交通相关字段 ───────────────────────────────────────────
     if subcategory in ("air", "train") or (dep_city and arr_city and dep_city != arr_city):
@@ -744,6 +749,87 @@ def _normalize_json_train_physical(raw: dict) -> dict:
     return result
 
 
+def _normalize_json_meeting_file(raw: dict) -> dict:
+    """归一化 meeting_file_template 抽取结果。"""
+    meeting_name = str(raw.get("会议名称") or "").strip()
+    meeting_city_raw = raw.get("会议城市")
+    meeting_place = str(raw.get("会议地点") or "").strip()
+    start_dt = raw.get("会议开始日期")
+    end_dt = raw.get("会议结束日期")
+
+    dep_city = normalize_transport_city(meeting_city_raw) if meeting_city_raw else ""
+    if not dep_city and meeting_place:
+        dep_city = normalize_transport_city(meeting_place)
+
+    meal_flag = str(raw.get("餐食是否自理") or "").strip()
+    meal_type = str(raw.get("供餐类型") or "").strip()
+
+    desc_parts = [x for x in [meeting_name, meeting_place] if x]
+    items_desc = " ".join(desc_parts) if desc_parts else "会议文件"
+
+    result: dict[str, Any] = {
+        "invoice_type_detected": "meeting_file",
+        "invoice_type": "会议文件",
+        "invoice_number": None,
+        "issue_date": start_dt or end_dt,
+        "seller_name": None,
+        "buyer_name": None,
+        "items_description": items_desc,
+        "remarks": f"餐食是否自理:{meal_flag};供餐类型:{meal_type}",
+        "amount": None,
+        "tax_amount": None,
+        "total_amount": None,
+        "invoice_subcategory": "meeting",
+        "departure_city": dep_city or None,
+        "arrival_city": dep_city or None,
+        "departure_time": start_dt,
+        "arrival_time": end_dt,
+        "is_transport": False,
+        "extracted_data": raw,
+    }
+    return result
+
+
+def _normalize_json_ridehailing_itinerary(raw: dict) -> dict:
+    """归一化 ride-hailing_itinerary_template 抽取结果。"""
+    trip_time = raw.get("打车时间（上车时间）")
+    city_raw = raw.get("城市")
+    start_addr = str(raw.get("上车地点（起点）") or "").strip()
+    end_addr = str(raw.get("下车地点（终点）") or "").strip()
+
+    city = normalize_transport_city(city_raw) if city_raw else ""
+    if not city and start_addr:
+        city = normalize_transport_city(start_addr)
+    if not city and end_addr:
+        city = normalize_transport_city(end_addr)
+
+    amount = _safe_float(raw.get("打车费用（金额）"))
+    route = f"{start_addr}→{end_addr}".strip("→")
+    desc = f"打车行程单 {route}".strip()
+
+    result: dict[str, Any] = {
+        "invoice_type_detected": "ridehailing_itinerary",
+        "invoice_type": "打车行程单",
+        "invoice_number": None,
+        "issue_date": trip_time,
+        "seller_name": None,
+        "buyer_name": None,
+        "items_description": desc or "打车行程单",
+        "remarks": None,
+        "amount": amount,
+        "tax_amount": None,
+        "total_amount": amount,
+        "invoice_subcategory": "ridehailing_local",
+        "departure_city": city or None,
+        "arrival_city": city or None,
+        "departure_time": trip_time,
+        "arrival_time": None,
+        "is_transport": False,
+        "extracted_data": raw,
+    }
+    return result
+
+
 def _normalize_from_json_templates(raw: dict, template: dict) -> dict:
     """根据 template_id 选择对应的 JSON 模板归一化函数。"""
     template_id = template.get("id")
@@ -756,6 +842,10 @@ def _normalize_from_json_templates(raw: dict, template: dict) -> dict:
         return _normalize_json_air_itinerary(raw)
     elif internal_key == "train_physical":
         return _normalize_json_train_physical(raw)
+    elif internal_key == "meeting_file":
+        return _normalize_json_meeting_file(raw)
+    elif internal_key == "ridehailing_itinerary":
+        return _normalize_json_ridehailing_itinerary(raw)
     
     # 兜底：对于用户新增的发票类型，走通用的兜底
     # 按照 plan: 使用通用的 _normalize_result(raw, "general")

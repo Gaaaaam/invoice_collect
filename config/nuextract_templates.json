@@ -126,6 +126,30 @@
                 "票价": "verbatim-string",
                 "乘客姓名": "verbatim-string"
             }
+        },
+        {
+            "id": "meeting_file_template",
+            "invoice_type": "会议文件",
+            "schema": {
+                "会议名称": "string",
+                "会议开始日期": "date-time",
+                "会议结束日期": "date-time",
+                "会议地点": "string",
+                "会议城市": "string",
+                "餐食是否自理": ["是", "否"],
+                "供餐类型": ["未供餐", "早餐", "午餐", "晚餐", "全包(含早餐、午餐、晚餐)"]
+            }
+        },
+        {
+            "id": "ride-hailing_itinerary_template",
+            "invoice_type": "打车行程单",
+            "schema": {
+                "打车时间（上车时间）": "date-time",
+                "上车地点（起点）": "string",
+                "下车地点（终点）": "string",
+                "打车费用（金额）": "number",
+                "城市": "string"
+            }
         }
     ]
 }

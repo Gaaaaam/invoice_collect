@@ -202,6 +202,9 @@ def _non_transport_absorb_date(inv: dict) -> Optional[date]:
         "住宿日期",
         "入住时间",
         "trip_date",
+        "会议开始日期",
+        "会议结束日期",
+        "打车时间（上车时间）",
     ):
         v = ex.get(key)
         if v and str(v).strip():
@@ -217,6 +220,87 @@ def _non_transport_absorb_date(inv: dict) -> Optional[date]:
     if ev:
         return ev.date()
     return _parse_date(inv.get("departure_time") or inv.get("issue_date"))
+
+
+def _collect_non_transport_candidate_cities(inv: dict) -> set[str]:
+    """收集非交通票可用于归组匹配的城市候选。"""
+    ex = inv.get("extracted_data") if isinstance(inv.get("extracted_data"), dict) else {}
+    raw_values: list[str] = []
+
+    for key in ("departure_city", "arrival_city"):
+        v = inv.get(key)
+        if v and str(v).strip():
+            raw_values.append(str(v).strip())
+
+    for key in (
+        "会议城市",
+        "会议地点",
+        "城市",
+        "上车地点（起点）",
+        "下车地点（终点）",
+        "出发地",
+        "到达地",
+        "出发地点(自FROM)",
+        "到达地点(至TO)",
+        "备注出发地",
+        "备注目的地",
+    ):
+        v = ex.get(key)
+        if v and str(v).strip():
+            raw_values.append(str(v).strip())
+
+    # 会议/住宿常见兜底：地点只出现在文本或销售方名称中
+    for key in ("seller_name", "remarks", "items_description"):
+        v = inv.get(key)
+        if v and str(v).strip():
+            raw_values.append(str(v).strip())
+
+    seller_info = ex.get("销售方信息")
+    if isinstance(seller_info, dict):
+        name = seller_info.get("名称")
+        if name and str(name).strip():
+            raw_values.append(str(name).strip())
+
+    buyer_info = ex.get("购买方信息")
+    if isinstance(buyer_info, dict):
+        name = buyer_info.get("名称")
+        if name and str(name).strip():
+            raw_values.append(str(name).strip())
+
+    out: set[str] = set()
+    for raw in raw_values:
+        city = _normalize_city(raw)
+        if city:
+            out.add(city)
+    return out
+
+
+def _city_matches_loop(loop: "TravelLoop", city: str) -> bool:
+    if not city:
+        return False
+    loop_cities = {
+        c for c in (
+            [_normalize_city(x) for x in loop.cities_path]
+            + [_normalize_city(loop.start_city), _normalize_city(loop.end_city)]
+        )
+        if c
+    }
+    if not loop_cities:
+        return False
+    for lc in loop_cities:
+        if city == lc:
+            return True
+        if _cities_chain_match(lc, city) or _cities_chain_match(city, lc):
+            return True
+    return False
+
+
+def _non_transport_city_matches_loop(inv: dict, loop: "TravelLoop") -> bool:
+    """非交通票城市需命中行程路径城市（含起止城市）。"""
+    for city in _collect_non_transport_candidate_cities(inv):
+        if _city_matches_loop(loop, city):
+            return True
+    return False
 
 
 def _pick_next_transport_leg(
@@ -330,8 +414,35 @@ class TravelLoop:
             if inv["id"] in self.all_invoice_ids:
                 continue
             d = _non_transport_absorb_date(inv)
-            if d and window_start <= d <= window_end:
+            city_ok = _non_transport_city_matches_loop(inv, self)
+            if d and window_start <= d <= window_end and city_ok:
                 self.all_invoice_ids.append(inv["id"])
+
+
+def match_invoice_to_travel_loop(
+    invoice: dict,
+    loops: list[TravelLoop],
+    *,
+    date_padding_days: int = 1,
+) -> Optional[int]:
+    """
+    判断一张非交通票据可吸附到哪个差旅行程组。
+    返回命中的 loops 下标；无命中返回 None。
+    """
+    d = _non_transport_absorb_date(invoice)
+    if d is None:
+        return None
+
+    for idx, loop in enumerate(loops):
+        if loop.start_date is None or loop.end_date is None:
+            continue
+        window_start = loop.start_date - timedelta(days=date_padding_days)
+        window_end = loop.end_date + timedelta(days=date_padding_days)
+        if not (window_start <= d <= window_end):
+            continue
+        if _non_transport_city_matches_loop(invoice, loop):
+            return idx
+    return None
 
 
 def _get_transport_mode(inv: dict) -> str:

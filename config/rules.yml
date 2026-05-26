@@ -1,15 +1,15 @@
 rules:
-- id: rule_train_reimbursement_voucher
+- id: rule_1779083931025_0.2893571278796888
   name: 火车票报销凭证归差旅费
   priority: 8
   conditions:
-  - field: remarks
+  - field: invoice_type
     match_type: contains
     value: 报销凭证
-  - field: remarks
+  - field: invoice_type
     match_type: contains
     value: 仅供报销使用
-  - field: remarks
+  - field: invoice_type
     match_type: contains
     value: 退票改签
   - field: items_description
@@ -26,7 +26,7 @@ rules:
     value: 检票\s*[:：]
   condition_logic: OR
   target_category: travel
-- id: rule_train_physical_seat_class
+- id: rule_1779083931025_0.3974670402121734
   name: 物理火车票座位等级+站名归差旅费
   priority: 9
   conditions:
@@ -38,7 +38,7 @@ rules:
     value: 火车票
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948244_0.2186690169075437
+- id: rule_1779083931025_0.12142992233359229
   name: 机票行程单归差旅费
   priority: 10
   conditions:
@@ -50,7 +50,7 @@ rules:
     value: 行程单
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.23753908860717055
+- id: rule_1779083931025_0.14591161346337966
   name: 火车票归差旅费
   priority: 10
   conditions:
@@ -80,7 +80,7 @@ rules:
     value: 电子客票号
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.07501808280487332
+- id: rule_1779083931025_0.8734400087656566
   name: 船票归差旅费
   priority: 10
   conditions:
@@ -92,7 +92,7 @@ rules:
     value: 轮船
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.2958832295809526
+- id: rule_1779083931025_0.7113103882202716
   name: 住宿费归差旅费
   priority: 20
   conditions:
@@ -107,7 +107,7 @@ rules:
     value: (住宿|客房|房费)
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.10310541193277922
+- id: rule_1779083931025_0.8740840008446356
   name: 出租车/网约车归差旅费
   priority: 20
   conditions:
@@ -122,7 +122,7 @@ rules:
     value: (客运服务费|运输服务\*?客运服务费|网约车|打车费|约车服务)
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.47594353967137126
+- id: rule_1779083931025_0.6219371014944072
   name: 会议场地费归会议费
   priority: 10
   conditions:
@@ -134,7 +134,7 @@ rules:
     value: (会展|会议中心|培训中心)
   condition_logic: OR
   target_category: meeting
-- id: rule_1775033948245_0.6520635767141829
+- id: rule_1779083931025_0.10209475803659873
   name: 办公耗材归材料费
   priority: 20
   conditions:
@@ -146,7 +146,7 @@ rules:
     value: (办公|文具|耗材)
   condition_logic: OR
   target_category: material
-- id: rule_1775033948245_0.11635468216879197
+- id: rule_1779083931025_0.2598295547781547
   name: 原材料归材料费
   priority: 20
   conditions:
@@ -155,7 +155,7 @@ rules:
     value: (原材料|材料|零件|配件|备件)
   condition_logic: OR
   target_category: material
-- id: rule_1775033948245_0.7981118664847423
+- id: rule_1779083931025_0.19717299654158538
   name: 电子发票-代订机票归差旅费
   priority: 5
   conditions:
@@ -167,7 +167,7 @@ rules:
     value: (携程|去哪儿|飞猪|同程|途牛|艺龙|华程|中青旅|中信旅|国旅|中旅|南湖国际|环球旅行)
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.17506779647521487
+- id: rule_1779083931025_0.7731426721309715
   name: 电子发票-代订火车票归差旅费
   priority: 5
   conditions:
@@ -176,7 +176,7 @@ rules:
     value: (代订火车票|代订高铁票|代订动车票|铁路客票|代购火车票|代购高铁)
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.42203903779161145
+- id: rule_1779083931025_0.10627489176437832
   name: 电子发票-代订住宿归差旅费
   priority: 5
   conditions:
@@ -185,7 +185,7 @@ rules:
     value: (代订酒店|代订客房|代订住宿|住宿服务|酒店服务|代订宾馆)
   condition_logic: OR
   target_category: travel
-- id: rule_1775033948245_0.9512643607569243
+- id: rule_1779083931025_0.22615609567722605
   name: 电子发票-会议服务费归会议费
   priority: 5
   conditions:
@@ -194,7 +194,7 @@ rules:
     value: (会议服务|会务费|会务服务|会议室租赁|场地租赁|学术会议|研讨会|培训服务费)
   condition_logic: OR
   target_category: meeting
-- id: rule_1775033948245_0.9682890999058592
+- id: rule_1779083931025_0.7697438403820858
   name: OTA平台代订交通归差旅费
   priority: 8
   conditions:
