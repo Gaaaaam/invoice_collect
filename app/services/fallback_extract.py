@@ -301,6 +301,19 @@ def extract_full_text_from_file(file_path: str, filename_hint: str, ocr_cfg: dic
     raise RuntimeError(f"不支持的扩展名: {ext}")
 
 
+def extract_full_text_from_segment(file_path: str, filename_hint: str, ocr_cfg: dict) -> str:
+    """从已拆分的 segment 文件抽取全文（单 segment，不跨文件合并）。"""
+    return extract_full_text_from_file(file_path, filename_hint, ocr_cfg)
+
+
+def find_all_invoice_numbers(text: str) -> list[str]:
+    """在全文/页文本中查找全部发票号码（用于多票检测）。"""
+    nums: list[str] = []
+    for m in _RE_INVOICE_NO.finditer(text or ""):
+        nums.append(m.group(1).strip())
+    return nums
+
+
 def _heuristic_raw(full_text: str, inv_type: str) -> dict[str, Any]:
     text = full_text.strip()
     raw: dict[str, Any] = {}

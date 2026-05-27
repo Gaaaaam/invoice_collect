@@ -32,6 +32,7 @@ from app.services.grouper import (
     detect_travel_loops,
     group_meeting_invoices,
     match_invoice_to_travel_loop,
+    match_invoice_to_travel_loop_by_time_only,
 )
 from app.services.progress import ProgressEvent, progress_manager
 
@@ -349,6 +350,48 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                         inv for inv in meeting_candidates if inv.id not in moved_meeting_ids
                     ]
 
+                # 跨大类：未入组的票据若时间命中差旅行程 ±1 天，强制归入差旅组
+                loop_ids = {inv_id for loop in loops for inv_id in loop.all_invoice_ids}
+                cross_category_ids: set[int] = set()
+                cross_category_candidates: list[Invoice] = []
+                for cat in ("meeting", "material", "other"):
+                    for inv in category_buckets.get(cat, []):
+                        if inv.id not in loop_ids:
+                            cross_category_candidates.append(inv)
+
+                for inv in cross_category_candidates:
+                    inv_dict = _invoice_to_dict(inv)
+                    loop_idx = match_invoice_to_travel_loop_by_time_only(
+                        inv_dict, loops, date_padding_days=1
+                    )
+                    if loop_idx is None:
+                        continue
+                    cross_category_ids.add(inv.id)
+                    target_loop = loops[loop_idx]
+                    if inv.id not in target_loop.all_invoice_ids:
+                        target_loop.all_invoice_ids.append(inv.id)
+
+                if cross_category_ids:
+                    item_rows = await db.execute(
+                        select(CollectionItem).where(CollectionItem.invoice_id.in_(cross_category_ids))
+                    )
+                    for ci in item_rows.scalars().all():
+                        ci.category_id = "travel"
+                        ci.classified_by = "rule"
+                        ci.classified_at = datetime.utcnow()
+                        if not ci.note:
+                            ci.note = "cross_category_travel_by_time"
+                    for cat in ("meeting", "material", "other"):
+                        moved = [
+                            inv for inv in category_buckets.get(cat, [])
+                            if inv.id in cross_category_ids
+                        ]
+                        category_buckets["travel"].extend(moved)
+                        category_buckets[cat] = [
+                            inv for inv in category_buckets.get(cat, [])
+                            if inv.id not in cross_category_ids
+                        ]
+
                 # 仅解除「本次参与差旅分组」的发票与旧组的关联，避免误伤未参与归集的发票（如历史归档）
                 travel_ids_to_regroup = {inv.id for inv in category_buckets.get("travel", [])}
                 await db.execute(
@@ -379,12 +422,16 @@ async def _run_collection(task_id: str, request: ProcessRequest) -> None:
                 if moved_meeting_ids:
                     await emit(2, 4, 73, "分组",
                                f"差旅：已将 {len(moved_meeting_ids)} 张会议相关票据并入差旅行程")
+                if cross_category_ids:
+                    await emit(2, 4, 74, "分组",
+                               f"差旅：已将 {len(cross_category_ids)} 张跨大类票据按时间并入差旅行程")
                 logger.info(
-                    "collection task_id=%s travel_groups=%s closed_loops=%s moved_meeting_to_travel=%s",
+                    "collection task_id=%s travel_groups=%s closed_loops=%s moved_meeting_to_travel=%s cross_category_by_time=%s",
                     task_id,
                     len(loops),
                     closed,
                     len(moved_meeting_ids),
+                    len(cross_category_ids),
                 )
 
                 for idx, loop in enumerate(loops):

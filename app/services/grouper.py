@@ -205,6 +205,7 @@ def _non_transport_absorb_date(inv: dict) -> Optional[date]:
         "会议开始日期",
         "会议结束日期",
         "打车时间（上车时间）",
+        "支付时间",
     ):
         v = ex.get(key)
         if v and str(v).strip():
@@ -443,6 +444,57 @@ def match_invoice_to_travel_loop(
         if _non_transport_city_matches_loop(invoice, loop):
             return idx
     return None
+
+
+def match_invoice_to_travel_loop_by_time_only(
+    invoice: dict,
+    loops: list["TravelLoop"],
+    *,
+    date_padding_days: int = 1,
+) -> Optional[int]:
+    """
+    仅按时间窗 [start-padding, end+padding] 匹配差旅行程组，不要求城市。
+    多命中时优先选与行程中点距离最近的组，仍平局则选时间窗更窄的组。
+    """
+    d = _non_transport_absorb_date(invoice)
+    if d is None:
+        return None
+
+    matches: list[tuple[int, date, date]] = []
+    for idx, loop in enumerate(loops):
+        if loop.start_date is None or loop.end_date is None:
+            continue
+        window_start = loop.start_date - timedelta(days=date_padding_days)
+        window_end = loop.end_date + timedelta(days=date_padding_days)
+        if window_start <= d <= window_end:
+            matches.append((idx, window_start, window_end))
+
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0][0]
+
+    def _score(item: tuple[int, date, date]) -> tuple[int, int]:
+        idx, window_start, window_end = item
+        loop = loops[idx]
+        assert loop.start_date is not None and loop.end_date is not None
+        mid_ord = (loop.start_date.toordinal() + loop.end_date.toordinal()) // 2
+        mid = date.fromordinal(mid_ord)
+        dist = abs((d - mid).days)
+        span = (window_end - window_start).days
+        return (dist, span)
+
+    matches.sort(key=_score)
+    return matches[0][0]
+
+
+def collect_invoices_not_in_loops(
+    invoices: list[dict],
+    loops: list["TravelLoop"],
+) -> list[dict]:
+    """返回尚未归入任何差旅行程组的发票。"""
+    absorbed = {inv_id for loop in loops for inv_id in loop.all_invoice_ids}
+    return [inv for inv in invoices if inv["id"] not in absorbed]
 
 
 def _get_transport_mode(inv: dict) -> str:

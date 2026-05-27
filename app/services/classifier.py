@@ -170,6 +170,15 @@ async def classify_invoice(
 
     # 1b. 会议相关单据先归 meeting，后续在分组阶段可迁移到 travel 闭环
     detected = invoice.get("invoice_type_detected") or ""
+    if detected == "payment_receipt":
+        logger.info(
+            "classify invoice_id=%s file=%s path=payment_receipt detected=%s -> category=other (classified_by=rule)",
+            inv_id,
+            filename,
+            detected,
+        )
+        _log_invoice_debug_context(invoice)
+        return "other", "rule"
     if detected in ("meeting_file", "meeting_invoice"):
         logger.info(
             "classify invoice_id=%s file=%s path=meeting_candidate detected=%s -> category=meeting (classified_by=rule)",
