@@ -2,7 +2,7 @@
     "templates": [
         {
             "id": "regular_invoice_template",
-            "invoice_type": "电子发票（普通发票）",
+            "document_type": "电子发票（普通发票）",
             "schema": {
                 "发票号码": "verbatim-string",
                 "开票日期": "date-time",
@@ -53,7 +53,7 @@
         },
         {
             "id": "railway_electronic_ticket_template",
-            "invoice_type": "电子发票（铁路电子客票）",
+            "document_type": "电子发票（铁路电子客票）",
             "schema": {
                 "发票号码": "verbatim-string",
                 "开票日期": "date-time",
@@ -75,7 +75,7 @@
         },
         {
             "id": "air_transportation_electronic_ticket_itinerary",
-            "invoice_type": "航空运输电子客票行程单",
+            "document_type": "航空运输电子客票行程单",
             "schema": {
                 "旅客姓名": "string",
                 "航班号(FLIGHT)": "string",
@@ -113,7 +113,7 @@
         },
         {
             "id": "train_physical_ticket",
-            "invoice_type": "火车票报销凭证",
+            "document_type": "火车票报销凭证",
             "schema": {
                 "票号": "verbatim-string",
                 "车次": "verbatim-string",
@@ -129,7 +129,7 @@
         },
         {
             "id": "meeting_file_template",
-            "invoice_type": "会议文件",
+            "document_type": "会议文件",
             "schema": {
                 "会议名称": "string",
                 "会议开始日期": "date-time",
@@ -142,13 +142,24 @@
         },
         {
             "id": "ride-hailing_itinerary_template",
-            "invoice_type": "打车行程单",
+            "document_type": "打车行程单",
             "schema": {
                 "打车时间（上车时间）": "date-time",
                 "上车地点（起点）": "string",
                 "下车地点（终点）": "string",
                 "打车费用（金额）": "number",
                 "城市": "string"
+            }
+        },
+        {
+            "id": "payment_receipt_template",
+            "document_type": "支付凭证/截图/小票",
+            "schema": {
+                "支付时间": "date-time",
+                "支付金额": "number",
+                "支付方式": "string",
+                "支付状态": "string",
+                "支付备注": "string"
             }
         }
     ]

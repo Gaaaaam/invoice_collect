@@ -137,7 +137,9 @@ const I18N = {
     progressCancelledTitle: '归集已取消', progressCancelledDetail: '本次归集已取消，未保存任何结果。',
     progressCancelledToast: '已取消本次归集',
     categoryGrouping: '分组',
-    uploadSuccess: '成功上传 {count} 张发票', uploadFailed: '上传失败：{error}',
+    uploadSuccess: '成功上传 {count} 张发票',
+    uploadSplitSuccess: '已从 {files} 个文件中识别 {count} 张发票',
+    uploadFailed: '上传失败：{error}',
     emptyBoard: '点击「开始归集」按钮对发票进行自动归集分类',
     ungrouped: '未分组', addGroup: '＋ 新建分组', dropHere: '拖拽发票到此处',
     unclassified: '未分类', invoiceCount: '{count} 张', unknownType: '未知类型',
@@ -198,7 +200,9 @@ const I18N = {
     progressCancelledDetail: 'Cancelled. No changes were saved.',
     progressCancelledToast: 'Collection was cancelled',
     categoryGrouping: 'Groups',
-    uploadSuccess: 'Uploaded {count} invoice(s)', uploadFailed: 'Upload failed: {error}',
+    uploadSuccess: 'Uploaded {count} invoice(s)',
+    uploadSplitSuccess: 'Recognized {count} invoice(s) from {files} file(s)',
+    uploadFailed: 'Upload failed: {error}',
     emptyBoard: 'Click "Start Collection" to classify invoices',
     ungrouped: 'Ungrouped', addGroup: '+ New Group', dropHere: 'Drag invoices here',
     unclassified: 'Unclassified', invoiceCount: '{count}', unknownType: 'Unknown type',
@@ -501,7 +505,11 @@ async function handleFiles(files) {
     const uploaded = await uploadInvoicesXHR(formData);
     setUploadOverlayPhase('done');
     document.getElementById('uploadProgressTitle').textContent = t('uploadDoneTitle');
-    toast(t('uploadSuccess', { count: uploaded.length }), 'success');
+    if (uploaded.length > files.length) {
+      toast(t('uploadSplitSuccess', { count: uploaded.length, files: files.length }), 'success');
+    } else {
+      toast(t('uploadSuccess', { count: uploaded.length }), 'success');
+    }
     await loadInvoices();
     await new Promise(r => setTimeout(r, 400));
   } catch (e) {
@@ -2269,7 +2277,7 @@ function normalizeNuExtractTemplateItem(item) {
   const schema = item && typeof item === 'object' ? (item.schema ?? item.schema_definition ?? {}) : {};
   return {
     id: (item && item.id) ? item.id : `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    invoice_type: item?.invoice_type || '',
+    document_type: item?.document_type || item?.invoice_type || '',
     schema,
     schemaTree: schemaToFieldTree(schema),
   };
@@ -2388,8 +2396,8 @@ function renderNuExtractTemplateEditor(templates) {
       <div class="rule-item-header">
         <span style="font-size:16px">📄</span>
         <input class="rule-name-input"
-               value="${escAttr(t.invoice_type || '')}"
-               data-action="edit-invoice-type"
+               value="${escAttr(t.document_type || '')}"
+               data-action="edit-document-type"
                data-template-idx="${i}"
                placeholder="发票类型名称"
                style="flex:1" />
@@ -2414,7 +2422,7 @@ function addNuExtractTemplate() {
   if (!Array.isArray(state.nuExtractTemplates)) state.nuExtractTemplates = [];
   state.nuExtractTemplates.push({
     id: `tpl_${Date.now()}`,
-    invoice_type: '新发票类型',
+    document_type: '新文档类型',
     schema: {},
     schemaTree: [createDefaultTemplateField()],
   });
@@ -2423,7 +2431,7 @@ function addNuExtractTemplate() {
 
 function removeNuExtractTemplate(idx) {
   const tpl = state.nuExtractTemplates[idx];
-  const tplName = tpl?.invoice_type || `第 ${idx + 1} 个模板`;
+  const tplName = tpl?.document_type || `第 ${idx + 1} 个模板`;
   if (!confirm(`确认删除发票类型「${tplName}」及其关联的抽取模板吗？此操作不可撤销。`)) return;
   state.nuExtractTemplates.splice(idx, 1);
   renderNuExtractTemplateEditor(state.nuExtractTemplates);
@@ -2436,26 +2444,26 @@ function collectNuExtractTemplates() {
     throw new Error('至少需要保留一个发票类型与对应抽取模板');
   }
   return templates.map((tpl, i) => {
-    const invoice_type = (tpl.invoice_type || '').trim();
-    if (!invoice_type) {
-      throw new Error(`第 ${i + 1} 个模板的发票类型名称不能为空`);
+    const document_type = (tpl.document_type || '').trim();
+    if (!document_type) {
+      throw new Error(`第 ${i + 1} 个模板的文档类型名称不能为空`);
     }
-    if (typeNameSet.has(invoice_type)) {
-      throw new Error(`发票类型「${invoice_type}」重复，请保持唯一`);
+    if (typeNameSet.has(document_type)) {
+      throw new Error(`文档类型「${document_type}」重复，请保持唯一`);
     }
-    typeNameSet.add(invoice_type);
+    typeNameSet.add(document_type);
     const fieldTree = tpl.schemaTree || [];
-    validateFieldTree(fieldTree, `模板「${invoice_type}」`);
+    validateFieldTree(fieldTree, `模板「${document_type}」`);
     const schema = fieldTreeToSchema(fieldTree);
     if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-      throw new Error(`第 ${i + 1} 个模板 (${invoice_type}) 的 Schema 必须是 JSON 对象`);
+      throw new Error(`第 ${i + 1} 个模板 (${document_type}) 的 Schema 必须是 JSON 对象`);
     }
     if (!Object.keys(schema).length) {
-      throw new Error(`第 ${i + 1} 个模板 (${invoice_type}) 至少需要一个字段`);
+      throw new Error(`第 ${i + 1} 个模板 (${document_type}) 至少需要一个字段`);
     }
     // 复用原有的 ID 或生成新 ID
     const id = (tpl && tpl.id) ? tpl.id : `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    return { id, invoice_type, schema };
+    return { id, document_type, schema };
   });
 }
 
@@ -2518,8 +2526,8 @@ function handleTemplateEditorChange(event) {
   const template = state.nuExtractTemplates[templateIdx];
   const path = el.dataset.path || '';
 
-  if (action === 'edit-invoice-type') {
-    template.invoice_type = String(el.value || '').trim();
+  if (action === 'edit-document-type') {
+    template.document_type = String(el.value || '').trim();
     return;
   }
 

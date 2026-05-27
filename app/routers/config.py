@@ -51,10 +51,10 @@ def _validate_nuextract_templates(config: NuExtractTemplatesConfig) -> None:
         raise HTTPException(status_code=400, detail="至少需要保留一个发票类型与对应抽取模板")
 
     seen_ids: set[str] = set()
-    seen_invoice_types: set[str] = set()
+    seen_document_types: set[str] = set()
     for idx, item in enumerate(config.templates, start=1):
         tpl_id = (item.id or "").strip()
-        inv_type = (item.invoice_type or "").strip()
+        doc_type = (item.document_type or "").strip()
         schema = item.schema_definition
 
         if not tpl_id:
@@ -63,16 +63,16 @@ def _validate_nuextract_templates(config: NuExtractTemplatesConfig) -> None:
             raise HTTPException(status_code=400, detail=f"模板 id 重复：{tpl_id}")
         seen_ids.add(tpl_id)
 
-        if not inv_type:
-            raise HTTPException(status_code=400, detail=f"第 {idx} 个模板缺少发票类型名称")
-        if inv_type in seen_invoice_types:
-            raise HTTPException(status_code=400, detail=f"发票类型重复：{inv_type}")
-        seen_invoice_types.add(inv_type)
+        if not doc_type:
+            raise HTTPException(status_code=400, detail=f"第 {idx} 个模板缺少文档类型名称")
+        if doc_type in seen_document_types:
+            raise HTTPException(status_code=400, detail=f"文档类型重复：{doc_type}")
+        seen_document_types.add(doc_type)
 
         if not isinstance(schema, dict) or not schema:
             raise HTTPException(
                 status_code=400,
-                detail=f"第 {idx} 个模板（{inv_type}）的 schema 必须是非空 JSON 对象",
+                detail=f"第 {idx} 个模板（{doc_type}）的 schema 必须是非空 JSON 对象",
             )
 
 
@@ -172,6 +172,14 @@ async def update_travel_config(config: TravelConfig):
 
 # ─── 抽取模板配置 ─────────────────────────────────────────────────────────────
 
+def _normalize_nuextract_template_item(item: dict) -> dict:
+    """向下兼容旧键 invoice_type。"""
+    out = dict(item or {})
+    if not out.get("document_type") and out.get("invoice_type"):
+        out["document_type"] = out["invoice_type"]
+    return out
+
+
 @router.get("/nuextract-templates", response_model=NuExtractTemplatesConfig)
 async def get_nuextract_templates():
     """读取抽取模板配置并自动向下兼容旧版 JSON"""
@@ -179,7 +187,10 @@ async def get_nuextract_templates():
     if not data:
         return NuExtractTemplatesConfig(templates=[])
     if "templates" in data:
-        return NuExtractTemplatesConfig.model_validate(data)
+        normalized = {
+            "templates": [_normalize_nuextract_template_item(t) for t in data["templates"]]
+        }
+        return NuExtractTemplatesConfig.model_validate(normalized)
     
     # 兼容老格式
     _LEGACY_MAP = {
@@ -190,13 +201,13 @@ async def get_nuextract_templates():
     }
     templates = []
     for k, v in data.items():
-        if k == "invoice_type":
+        if k in ("invoice_type", "document_type"):
             continue
         if isinstance(v, dict):
-            inv_type = _LEGACY_MAP.get(k, k)
+            doc_type = _LEGACY_MAP.get(k, k)
             templates.append({
                 "id": k,
-                "invoice_type": inv_type,
+                "document_type": doc_type,
                 "schema": v
             })
     return NuExtractTemplatesConfig(templates=templates)
