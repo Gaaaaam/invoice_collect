@@ -31,6 +31,12 @@ class InvoiceResponse(InvoiceBase):
     uploaded_at: datetime
     extract_status: str
     extracted_data: Optional[dict] = None
+    source_filename: Optional[str] = None
+    source_file_path: Optional[str] = None
+    segment_index: Optional[int] = None
+    page_range: Optional[str] = None
+    split_confidence: Optional[float] = None
+    needs_review: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -147,6 +153,12 @@ class ExtractionOCRConfig(BaseModel):
     min_text_chars: int = 80
 
 
+class DocumentConfig(BaseModel):
+    split_enabled: bool = True
+    pdf_process_all_pages: bool = True
+    min_images_for_word_split: int = 2
+
+
 class ExtractionConfig(BaseModel):
     provider: str = "auto"
     use_llm_on_fallback: bool = False
@@ -157,6 +169,7 @@ class ModelsConfig(BaseModel):
     llm: LLMConfig
     nuextract: NuExtractConfig
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    document: DocumentConfig = Field(default_factory=DocumentConfig)
 
 
 class TravelConfig(BaseModel):
@@ -167,7 +180,7 @@ class TravelConfig(BaseModel):
 
 class NuExtractTemplateItem(BaseModel):
     id: str
-    invoice_type: str
+    document_type: str
     schema_definition: dict[str, Any] = Field(
         ...,
         alias="schema",

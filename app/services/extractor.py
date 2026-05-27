@@ -2,7 +2,7 @@
 发票信息抽取模块（双阶段 NuExtract 流程）
 
 处理流程：
-  1. 【分类阶段】用 nuextract_templates.json 中的 invoice_type 列表作为模板，
+  1. 【分类阶段】用 nuextract_templates.json 中的 document_type 列表作为模板，
      让 NuExtract 判别发票属于哪种类型。
   2. 【抽取阶段】根据判别结果选取对应的 JSON 模板，再次调用 NuExtract 精准抽取字段。
 
@@ -56,11 +56,24 @@ def load_json_templates() -> dict:
             _JSON_TEMPLATES_CACHE = {}
     return _JSON_TEMPLATES_CACHE
 
+def _template_document_type(t: dict) -> str:
+    """读取模板文档类型名，兼容旧键 invoice_type。"""
+    return str(t.get("document_type") or t.get("invoice_type") or "").strip()
+
+
+def _normalize_template_item(t: dict) -> dict:
+    """确保模板对象含 document_type 键。"""
+    out = dict(t)
+    if not out.get("document_type") and out.get("invoice_type"):
+        out["document_type"] = out["invoice_type"]
+    return out
+
+
 def get_normalized_templates() -> list[dict]:
     """返回归一化后的 templates 数组"""
     data = load_json_templates()
     if "templates" in data:
-        return data["templates"]
+        return [_normalize_template_item(t) for t in data["templates"]]
     
     # 兼容老格式
     _LEGACY_MAP = {
@@ -71,13 +84,13 @@ def get_normalized_templates() -> list[dict]:
     }
     templates = []
     for k, v in data.items():
-        if k == "invoice_type":
+        if k in ("invoice_type", "document_type"):
             continue
         if isinstance(v, dict):
-            inv_type = _LEGACY_MAP.get(k, k)
+            doc_type = _LEGACY_MAP.get(k, k)
             templates.append({
                 "id": k,
-                "invoice_type": inv_type,
+                "document_type": doc_type,
                 "schema": v
             })
     return templates
@@ -91,6 +104,7 @@ _TEMPLATE_ID_TO_INTERNAL_KEY: dict[str, str] = {
     "train_physical_ticket": "train_physical",
     "meeting_file_template": "meeting_file",
     "ride-hailing_itinerary_template": "ridehailing_itinerary",
+    "payment_receipt_template": "payment_receipt",
 }
 
 # 不走 JSON 2-step，使用原有 Python 模板的类型
@@ -271,6 +285,7 @@ _FILENAME_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(滴滴|曹操出行|高德打车|嘀嗒|神州专车|网约车|ride\s*hailing)", re.I), "ridehailing"),
     (re.compile(r"(出租车发票|出租发票|taxi.*fare|车费发票)", re.I), "taxi"),
     (re.compile(r"(电子发票.*普通|普通.*电子发票)", re.I), "general_invoice"),
+    (re.compile(r"(支付凭证|支付截图|付款截图|payment\s*receipt|微信支付|支付宝)", re.I), "payment_receipt"),
 ]
 
 _CONTENT_RULES: list[tuple[re.Pattern, str]] = [
@@ -292,6 +307,7 @@ _CONTENT_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(滴滴出行|曹操出行|高德打车|哈啰出行|T3出行|享道出行)"), "ridehailing"),
     (re.compile(r"(出租汽车公司|出租车|TAXI|车费发票)"), "taxi"),
     (re.compile(r"电子发票[（(]普通发票"), "general_invoice"),
+    (re.compile(r"(支付成功|已支付|微信支付|支付宝|付款凭证|交易详情|支付凭证)"), "payment_receipt"),
 ]
 
 _ITEMS_SUBCATEGORY_RULES: list[tuple[re.Pattern, str]] = [
@@ -338,16 +354,17 @@ def _parse_classified_type(raw: dict, templates_list: list[dict], filename: str 
     """
     inv_type_str = ""
     if isinstance(raw, dict):
-        inv_type_str = str(raw.get("invoice_type") or "")
+        inv_type_str = str(raw.get("document_type") or raw.get("invoice_type") or "")
 
     # 精确匹配
     for t in templates_list:
-        if t["invoice_type"] == inv_type_str:
+        if _template_document_type(t) == inv_type_str:
             return t
 
     # 模糊匹配
     for t in templates_list:
-        if t["invoice_type"] in inv_type_str or inv_type_str in t["invoice_type"]:
+        doc_type = _template_document_type(t)
+        if doc_type in inv_type_str or inv_type_str in doc_type:
             return t
 
     # 关键词兜底（基于旧版常见类型）
@@ -366,6 +383,10 @@ def _parse_classified_type(raw: dict, templates_list: list[dict], filename: str 
     if "普通" in inv_type_str or "电子发票" in inv_type_str:
         for t in templates_list:
             if t.get("id") == "regular_invoice_template":
+                return t
+    if any(k in inv_type_str for k in ("支付凭证", "小票", "截图", "微信支付", "支付宝", "付款成功")):
+        for t in templates_list:
+            if t.get("id") == "payment_receipt_template":
                 return t
 
     # 回退文件名检测
@@ -403,6 +424,19 @@ def _extract_nuextract_payload(raw: Any) -> dict:
     if isinstance(results, list) and results:
         return _extract_nuextract_payload(results[0])
     return raw
+
+
+def _extract_all_nuextract_payloads(raw: Any) -> list[dict]:
+    """解析 NuExtract 响应中的全部结果（多票场景）。"""
+    if isinstance(raw, list):
+        return [_extract_nuextract_payload(item) for item in raw if item]
+    if not isinstance(raw, dict):
+        return [{}]
+    results = raw.get("results")
+    if isinstance(results, list) and len(results) > 1:
+        return [_extract_nuextract_payload(item) for item in results if item]
+    single = _extract_nuextract_payload(raw)
+    return [single] if single else [{}]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -830,6 +864,40 @@ def _normalize_json_ridehailing_itinerary(raw: dict) -> dict:
     return result
 
 
+def _normalize_json_payment_receipt(raw: dict) -> dict:
+    """归一化 payment_receipt_template 抽取结果。"""
+    pay_time = raw.get("支付时间")
+    amount = _safe_float(raw.get("支付金额"))
+    pay_method = str(raw.get("支付方式") or "").strip()
+    pay_status = str(raw.get("支付状态") or "").strip()
+    pay_note = str(raw.get("支付备注") or "").strip()
+
+    desc_parts = [x for x in [pay_method, pay_note] if x]
+    items_desc = " ".join(desc_parts) if desc_parts else "支付凭证"
+
+    result: dict[str, Any] = {
+        "invoice_type_detected": "payment_receipt",
+        "invoice_type": "支付凭证/截图/小票",
+        "invoice_number": None,
+        "issue_date": pay_time,
+        "seller_name": pay_method or None,
+        "buyer_name": None,
+        "items_description": items_desc,
+        "remarks": pay_status or None,
+        "amount": amount,
+        "tax_amount": None,
+        "total_amount": amount,
+        "invoice_subcategory": None,
+        "departure_city": None,
+        "arrival_city": None,
+        "departure_time": pay_time,
+        "arrival_time": None,
+        "is_transport": False,
+        "extracted_data": raw,
+    }
+    return result
+
+
 def _normalize_from_json_templates(raw: dict, template: dict) -> dict:
     """根据 template_id 选择对应的 JSON 模板归一化函数。"""
     template_id = template.get("id")
@@ -846,6 +914,8 @@ def _normalize_from_json_templates(raw: dict, template: dict) -> dict:
         return _normalize_json_meeting_file(raw)
     elif internal_key == "ridehailing_itinerary":
         return _normalize_json_ridehailing_itinerary(raw)
+    elif internal_key == "payment_receipt":
+        return _normalize_json_payment_receipt(raw)
     
     # 兜底：对于用户新增的发票类型，走通用的兜底
     # 按照 plan: 使用通用的 _normalize_result(raw, "general")
@@ -1121,7 +1191,7 @@ class InvoiceExtractor:
     ) -> dict:
         """
         双阶段 NuExtract 抽取（文件路径版本）：
-          Step 1：用 invoice_type 列表作为模板，判别发票类型
+          Step 1：用 document_type 列表作为模板，判别发票类型
           Step 2：按判别结果选对应 JSON 模板进行精准抽取
         """
         # 文件名快速检测（用于 taxi/ridehailing/hotel 的直接分路）
@@ -1140,21 +1210,21 @@ class InvoiceExtractor:
                     return _normalize_result(raw, hinted_type)
 
                 templates_list = get_normalized_templates()
-                type_list = [t["invoice_type"] for t in templates_list]
+                type_list = [_template_document_type(t) for t in templates_list]
 
                 # ── Step 1: 分类 ─────────────────────────────────────────────
                 cls_raw = self._pick_first_result(
                     await client.extract_from_files(
                         file_paths=[file_path],
-                        template={"invoice_type": type_list},
+                        template={"document_type": type_list},
                     )
                 )
                 matched_template = _parse_classified_type(cls_raw, templates_list, filename_for_detect)
                 
                 # ── Step 2: 精准抽取 ─────────────────────────────────────────
                 if matched_template and matched_template.get("schema"):
-                    inv_type_name = matched_template.get("invoice_type")
-                    print(f"[InvoiceExtractor] 分类结果 {filename_for_detect!r} → {inv_type_name}")
+                    doc_type_name = _template_document_type(matched_template)
+                    print(f"[InvoiceExtractor] 分类结果 {filename_for_detect!r} → {doc_type_name}")
                     ext_raw = self._pick_first_result(
                         await client.extract_from_files(
                             file_paths=[file_path],
@@ -1202,22 +1272,22 @@ class InvoiceExtractor:
                     return _normalize_result(raw, hinted_type)
 
                 templates_list = get_normalized_templates()
-                type_list = [t["invoice_type"] for t in templates_list]
+                type_list = [_template_document_type(t) for t in templates_list]
 
                 # Step 1: 分类
                 cls_raw = self._pick_first_result(
                     await client.extract_from_base64(
                         files_data=[b64_data],
                         storage_filenames=[filename],
-                        template={"invoice_type": type_list},
+                        template={"document_type": type_list},
                     )
                 )
                 matched_template = _parse_classified_type(cls_raw, templates_list, filename)
 
                 # Step 2: 精准抽取
                 if matched_template and matched_template.get("schema"):
-                    inv_type_name = matched_template.get("invoice_type")
-                    print(f"[InvoiceExtractor] 分类结果 {filename!r} → {inv_type_name}")
+                    doc_type_name = _template_document_type(matched_template)
+                    print(f"[InvoiceExtractor] 分类结果 {filename!r} → {doc_type_name}")
                     ext_raw = self._pick_first_result(
                         await client.extract_from_base64(
                             files_data=[b64_data],
@@ -1397,6 +1467,10 @@ class InvoiceExtractor:
     @staticmethod
     def _pick_first_result(raw_result: Any) -> dict:
         return _extract_nuextract_payload(raw_result)
+
+    @staticmethod
+    def pick_all_results(raw_result: Any) -> list[dict]:
+        return _extract_all_nuextract_payloads(raw_result)
 
 
 _extractor: Optional[InvoiceExtractor] = None
