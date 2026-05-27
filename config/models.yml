@@ -14,3 +14,7 @@ extraction:
     engine: rapidocr_onnx
     pdf_max_pages: 3
     min_text_chars: 80
+document:
+  split_enabled: true
+  pdf_process_all_pages: true
+  min_images_for_word_split: 2

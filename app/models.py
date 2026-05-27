@@ -38,6 +38,14 @@ class Invoice(Base):
     extracted_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     extract_status: Mapped[str] = mapped_column(String(20), default="pending")
 
+    # 文档拆分来源（nullable = 未拆分 / 老数据）
+    source_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_file_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    segment_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    page_range: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    split_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+
     collection_item: Mapped[Optional["CollectionItem"]] = relationship(
         "CollectionItem", back_populates="invoice", uselist=False
     )

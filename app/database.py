@@ -39,6 +39,12 @@ def _migrate_add_columns(conn):
     migrations = [
         "ALTER TABLE invoices ADD COLUMN remarks TEXT",
         "ALTER TABLE invoices ADD COLUMN invoice_subcategory VARCHAR(50)",
+        "ALTER TABLE invoices ADD COLUMN source_filename VARCHAR(255)",
+        "ALTER TABLE invoices ADD COLUMN source_file_path VARCHAR(512)",
+        "ALTER TABLE invoices ADD COLUMN segment_index INTEGER",
+        "ALTER TABLE invoices ADD COLUMN page_range VARCHAR(50)",
+        "ALTER TABLE invoices ADD COLUMN split_confidence FLOAT",
+        "ALTER TABLE invoices ADD COLUMN needs_review BOOLEAN DEFAULT 0",
     ]
     for sql in migrations:
         try:
